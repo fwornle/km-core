@@ -1,0 +1,51 @@
+{
+  "name": "@fwornle/km-core",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Shared KM core: canonical Entity/Relation types, GraphKMStore (Graphology + LevelDB + JSON export), UUIDv7 stamping",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "knowledge-graph",
+    "graphology",
+    "leveldb",
+    "uuidv7",
+    "km-core"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fwornle/km-core.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "classic-level": "^3.0.0",
+    "graphology": "^0.26.0",
+    "graphology-types": "^0.24.8",
+    "uuidv7": "^1.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
