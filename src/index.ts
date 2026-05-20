@@ -44,3 +44,19 @@ export type {
 // Pluggable ontology validator (D-19); v0.1 default is no-op.
 export type { OntologyValidator } from './validation/ontology.js';
 export { noopOntologyValidator } from './validation/ontology.js';
+
+// Phase 38 (ONTO-01/02): OntologyRegistry — auto-discovers upper.json + sibling
+// lower-ontology .json files in a configured directory, resolves per-class
+// extends chains with child-wins property/relationship merging, exposes
+// provenance + parent-chain accessors, and supports atomic reload (D-29).
+// The registry is auto-wired into GraphKMStore by Plan 38-05 when
+// GraphKMStoreOptions.ontologyDir is set; standalone use via the class.
+export { OntologyRegistry } from './ontology/registry.js';
+export type { OntologyRegistryOptions } from './ontology/registry.js';
+export { loadOntologyFile } from './ontology/loader.js';
+export type {
+  OntologyFile,
+  OntologyClass,
+  OntologyProperty,
+  ResolvedClass,
+} from './types/ontology.js';

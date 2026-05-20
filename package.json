@@ -8,6 +8,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./ontology": {
+      "types": "./dist/ontology/index.d.ts",
+      "import": "./dist/ontology/index.js"
     }
   },
   "files": [
