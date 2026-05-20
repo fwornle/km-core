@@ -34,13 +34,24 @@ export interface BSnapshot {
  * `SerializedGraph`. Multi-directed so it tolerates parallel relations between
  * the same pair (B does emit those — e.g. multiple `uses` edges with different
  * metadata).
+ *
+ * B's relations reference entities by `name`, not by `id` (legacy coding/
+ * GraphKnowledgeExporter behavior). Graphology requires edge endpoints to
+ * match node keys exactly, so we use the entity `name` as the node `key`
+ * (the `id` field is preserved inside `attributes` for CORE-03 ID survival).
+ *
+ * Round-trip parity contract: the round-trip test compares the converted
+ * SerializedGraph (output of this function) against the per-domain JSON
+ * export reassembled. Both sides must agree on the same shape — that's why
+ * we use `name` as `key` here AND why the test's `originalIds` set is built
+ * from `serialized.nodes.map(n => n.key)` (i.e. names, not legacy nanoids).
  */
 export function convertBToGraphology(b: BSnapshot): GraphologySerializedGraph {
   return {
     attributes: { ...(b.metadata ?? {}), _convertedFrom: 'b-snapshot-v1' },
     options: { type: 'directed', multi: true, allowSelfLoops: true },
     nodes: b.entities.map(e => ({
-      key: e.id,
+      key: (e as { name?: string }).name ?? e.id,
       attributes: e,
     })),
     edges: b.relations.map((r, idx) => ({
