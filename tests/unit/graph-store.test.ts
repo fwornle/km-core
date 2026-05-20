@@ -214,4 +214,56 @@ describe('GraphKMStore', () => {
     );
     expect(id).toBeDefined();
   });
+
+  // Phase 38 Plan 06 Task 2 — APPENDED tests (do NOT modify the 11 above).
+  // New Test 1 verifies Plan 38-05's auto-wired registry-backed validator.
+  // New Test 2 verifies Phase 37 BC-2 (skipOntologyCheck widening) survives Plan 05.
+
+  test('ontologyDir option auto-wires registry-backed validator', async () => {
+    await ctx.store.close();
+    fs.rmSync(ctx.tmpdir, { recursive: true, force: true });
+
+    ctx = makeStore({
+      ontologyDir: path.join(import.meta.dirname, '../fixtures/ontology'),
+    });
+    await ctx.store.open();
+
+    // Registry is exposed via the Plan 38-05 getter (D-28).
+    expect(ctx.store.ontology).toBeDefined();
+    expect(ctx.store.ontology!.isValidClass('Component')).toBe(true); // upper.json
+    expect(ctx.store.ontology!.isValidClass('RPU')).toBe(true);       // raas.json
+    expect(ctx.store.ontology!.isValidClass('Bogus')).toBe(false);
+
+    // Valid class succeeds.
+    const id = await ctx.store.putEntity({ name: 'Valid', entityType: 'Component' });
+    expect(id).toBeDefined();
+
+    // Invalid class is rejected with the Phase 37 verbatim error-text regex
+    // (Plan 38-04 contract: `Unknown ontology class: ${entityType}`).
+    await expect(
+      ctx.store.putEntity({ name: 'Bogus', entityType: 'Bogus' }),
+    ).rejects.toThrow(/Unknown ontology class/);
+  });
+
+  test('skipOntologyCheck bypasses registry validator (CF-D19 / BC-2)', async () => {
+    await ctx.store.close();
+    fs.rmSync(ctx.tmpdir, { recursive: true, force: true });
+    ctx = makeStore({
+      ontologyDir: path.join(import.meta.dirname, '../fixtures/ontology'),
+    });
+    await ctx.store.open();
+
+    // skipOntologyCheck: true MUST bypass BOTH parseEntityId AND the registry-
+    // backed validator (Phase 37 BC-2 widening preserved by Plan 05). Pass a
+    // non-v7 id and a class not in the registry; both gates are skipped.
+    const id = await ctx.store.putEntity(
+      {
+        id: 'not-a-uuid' as unknown as ReturnType<typeof mintEntityId>,
+        name: 'TrustedBulk',
+        entityType: 'NotInRegistry',
+      },
+      { skipOntologyCheck: true },
+    );
+    expect(id).toBe('not-a-uuid');
+  });
 });
