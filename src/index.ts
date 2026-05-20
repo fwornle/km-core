@@ -66,3 +66,11 @@ export type {
   OntologyProperty,
   ResolvedClass,
 } from './types/ontology.js';
+
+// Phase 39 (DATA-02): per-segment provenance merge helper. Pure function,
+// no store coupling; caller invokes BEFORE `store.putEntity` to fold new
+// text into `entity.metadata.descriptionSegments[]` (append-confirmation
+// on whitespace-normalized identical text per D-40, else push new segment
+// per D-39). D-41 monitoring at the 100-segments / 50-confirmations
+// thresholds via `process.stderr.write` (no `console.*`).
+export { mergeDescriptionSegment } from './segments/merge.js';
