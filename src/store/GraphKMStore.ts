@@ -391,6 +391,51 @@ export class GraphKMStore extends EventEmitter {
         ...(entity.metadata ?? {}),
         provenance: newProv,
       };
+
+      // D-33 supersession closure: if a NEW entity supersedes an old one,
+      // atomically (a) close the old entity's validUntil, (b) write the new
+      // entity, (c) materialize a SUPERSEDED_BY edge for D-35 reverse walk.
+      //
+      // Guarded by `!existing` per OQ#4 resolution (39-RESEARCH.md): a
+      // confirm-write that re-asserts `supersedes` against an EXISTING id is
+      // a silent no-op on this branch — predecessor closure + SUPERSEDED_BY
+      // edge fire ONLY on the create branch. The confirm-write itself
+      // (lastConfirmedBy / confirmationCount update above) still happens.
+      if (entity.supersedes !== undefined && !existing) {
+        const oldId = entity.supersedes as EntityId;
+        const oldEntity = this.graph.hasNode(oldId)
+          ? (this.graph.getNodeAttributes(oldId) as Entity)
+          : undefined;
+        if (!oldEntity) {
+          throw new Error(
+            `Supersession target ${String(oldId)} not in graph`,
+          );
+        }
+        if (oldEntity.validUntil !== undefined) {
+          process.stderr.write(
+            `[km-core/store] overwriting validUntil for ${String(oldId)} (was ${oldEntity.validUntil})\n`,
+          );
+        }
+        const closedOld: Entity = {
+          ...oldEntity,
+          validUntil: entity.validFrom!,
+          updatedAt: entity.validFrom!,
+        };
+        // Atomic two-write — batch() guarantees all-or-nothing (D-17). batch's
+        // internal putEntity call passes { skipOntologyCheck: true } per Plan
+        // 01, so neither write re-enters this branch (trusted path skips the
+        // entire `!trusted` block including this supersession-closure).
+        await this.batch([
+          { type: 'putEntity', entity: closedOld },
+          { type: 'putEntity', entity },
+        ]);
+        // Materialize SUPERSEDED_BY edge for D-35 reverse-walk index
+        // (Pattern 2A.1 — single source of truth in Graphology, no
+        // separate Map). batch() already fired emit + scheduleExport
+        // for both writes; addRelation fires its own relation:added.
+        await this.addRelation({ type: 'SUPERSEDED_BY', from: oldId, to: id });
+        return id;
+      }
     }
 
     // Graphology merge (C analog graph-store.ts:71 — but plain UUID
@@ -427,18 +472,42 @@ export class GraphKMStore extends EventEmitter {
   }
 
   /**
+   * D-34: active-only filter helper. Entities without `validUntil` are
+   * ALWAYS treated as active — this short-circuit (`validUntil ===
+   * undefined`) is what preserves Phase 37/38 backward compatibility:
+   * none of the existing 33 tests set `validUntil`, so the new active-
+   * only default does not regress them. Entities WITH `validUntil` are
+   * active iff `new Date(validUntil).getTime() > nowMs`.
+   */
+  private isActive(entity: Entity, nowMs: number): boolean {
+    if (entity.validUntil === undefined) return true;
+    return new Date(entity.validUntil).getTime() > nowMs;
+  }
+
+  /**
    * Find every entity whose `entityType` OR `ontologyClass` matches.
    * Both fields are checked because 37-PATTERNS notes OKM keeps both
    * in transit (entityType is authoritative; ontologyClass is the
    * legacy alias retained for BC during Phase 38).
+   *
+   * Phase 39 D-34: filters out superseded entities (`validUntil` set
+   * AND `<= now`) by default. Pass `{ includeSuperseded: true }` to
+   * receive the full history including superseded entries. Entities
+   * with `validUntil === undefined` ALWAYS pass the filter (BC short-
+   * circuit — preserves Phase 37/38 behavior).
    */
-  async findByOntologyClass(cls: string): Promise<Entity[]> {
+  async findByOntologyClass(
+    cls: string,
+    opts?: { includeSuperseded?: boolean },
+  ): Promise<Entity[]> {
+    const includeSuperseded = opts?.includeSuperseded === true;
+    const nowMs = Date.now();
     const matches: Entity[] = [];
     for (const nodeId of this.graph.nodes()) {
       const entity = this.graph.getNodeAttributes(nodeId) as Entity;
-      if (entity.entityType === cls || entity.ontologyClass === cls) {
-        matches.push(entity);
-      }
+      if (entity.entityType !== cls && entity.ontologyClass !== cls) continue;
+      if (!includeSuperseded && !this.isActive(entity, nowMs)) continue;
+      matches.push(entity);
     }
     return matches;
   }
@@ -490,6 +559,57 @@ export class GraphKMStore extends EventEmitter {
       matches.push(r);
     }
     return matches;
+  }
+
+  /**
+   * D-35: returns the supersession chain through `id`, ordered by
+   * `validFrom` ascending. Walks BACKWARD via `entity.supersedes`
+   * (collects predecessors) and FORWARD via `SUPERSEDED_BY` out-edges
+   * (collects successors). The input `id` is included in the result.
+   *
+   * Cycle-guarded via a visited Set (Pitfall 6 mitigation): on revisit
+   * the chain is truncated and a stderr-warn fires. If `id` is not in
+   * the graph, returns an empty array.
+   */
+  async getSupersessionChain(id: EntityId): Promise<Entity[]> {
+    if (!this.graph.hasNode(id)) return [];
+    const visited = new Set<EntityId>();
+    // Phase 1: walk backward via the `supersedes` attribute, building
+    // `before` in chronological order (prepend each predecessor).
+    const before: Entity[] = [];
+    let cursor: EntityId | undefined = id;
+    while (cursor !== undefined && !visited.has(cursor)) {
+      visited.add(cursor);
+      if (!this.graph.hasNode(cursor)) break;
+      const e = this.graph.getNodeAttributes(cursor) as Entity;
+      before.unshift(e);
+      cursor = e.supersedes;
+    }
+    if (cursor !== undefined && visited.has(cursor)) {
+      process.stderr.write(
+        `[km-core/store] supersession cycle detected at ${String(cursor)}; truncating chain\n`,
+      );
+    }
+    // Phase 2: walk forward via SUPERSEDED_BY out-edges from the input
+    // id. `before[]` already includes the input id; `after[]` collects
+    // its successors only.
+    const after: Entity[] = [];
+    cursor = id;
+    while (cursor !== undefined) {
+      let next: EntityId | undefined;
+      this.graph.forEachOutEdge(cursor, (_key, attrs, _src, tgt) => {
+        const r = attrs as Relation;
+        if (r.type === 'SUPERSEDED_BY' && !visited.has(tgt as EntityId)) {
+          next = tgt as EntityId;
+        }
+      });
+      if (next === undefined) break;
+      visited.add(next);
+      const e = this.graph.getNodeAttributes(next) as Entity;
+      after.push(e);
+      cursor = next;
+    }
+    return [...before, ...after];
   }
 
   /**
@@ -554,13 +674,26 @@ export class GraphKMStore extends EventEmitter {
    * Lazy async iterator (D-18) over entities matching the filter
    * object. Yields one entity at a time — consumer controls pull.
    * No filter ⇒ yields every entity.
+   *
+   * Phase 39 D-34: filters out superseded entities (`validUntil` set
+   * AND `<= now`) by default. Pass `{ includeSuperseded: true }` to
+   * receive the full history. Entities with `validUntil === undefined`
+   * ALWAYS pass the filter (BC short-circuit — preserves Phase 37/38
+   * behavior; the existing `iterate yields entities lazily and respects
+   * filter` test stays green because none of its fixtures set
+   * `validUntil`).
    */
-  async *iterate(filter?: FilterObject): AsyncIterable<Entity> {
+  async *iterate(
+    filter?: FilterObject,
+    opts?: { includeSuperseded?: boolean },
+  ): AsyncIterable<Entity> {
+    const includeSuperseded = opts?.includeSuperseded === true;
+    const nowMs = Date.now();
     for (const nodeId of this.graph.nodes()) {
       const entity = this.graph.getNodeAttributes(nodeId) as Entity;
-      if (this.matches(entity, filter)) {
-        yield entity;
-      }
+      if (!this.matches(entity, filter)) continue;
+      if (!includeSuperseded && !this.isActive(entity, nowMs)) continue;
+      yield entity;
     }
   }
 
