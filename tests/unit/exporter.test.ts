@@ -118,6 +118,17 @@ describe('Exporter', () => {
     }
     await vi.advanceTimersByTimeAsync(5000);
     expect(flushSpy).toHaveBeenCalledTimes(1);
+
+    // Drain the in-flight exportJson promise that was fired by the
+    // setTimeout callback — `scheduleExport` uses fire-and-forget on
+    // the promise. Without this drain, afterEach's `fs.rmSync` races
+    // with the temp-file rename and surfaces as ENOTEMPTY (#37-04
+    // pre-existing teardown race documented in Plan 03 SUMMARY).
+    const pending = flushSpy.mock.results[0]?.value;
+    if (pending && typeof (pending as { then?: unknown }).then === 'function') {
+      vi.useRealTimers();
+      await pending;
+    }
   });
 
   test('overlapping exports no-op the second via writing guard', async () => {

@@ -1,10 +1,15 @@
 // Public API barrel for @fwornle/km-core.
 //
 // Plan 02: canonical type surface (CORE-01) plus UUIDv7 ID layer (CORE-03).
-// Plans 03 and 04 will add `PersistenceManager`, `Exporter`, and the
-// `GraphKMStore` repository class.
+// Plan 03: PersistenceManager + Exporter primitives.
+// Plan 04: GraphKMStore repository class — full library surface (CORE-01/02/03).
 
-export const KM_CORE_VERSION = '0.1.0-pre';
+export const KM_CORE_VERSION = '0.1.0';
+
+// CORE-02: GraphKMStore composition class — repository API + UUIDv7 stamping
+// + events + atomic per-domain JSON export.
+export { GraphKMStore } from './store/GraphKMStore.js';
+export type { GraphKMStoreOptions } from './store/GraphKMStore.js';
 
 // CORE-03: UUIDv7 stamping + caller-supplied-id validation.
 export { mintEntityId } from './ids/mint.js';
