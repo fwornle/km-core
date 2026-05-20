@@ -3,3 +3,27 @@ dist/
 coverage/
 *.tgz
 .DS_Store
+
+# MCP Memory LevelDB (volatile runtime data)
+# Ignore binary database files, but track JSON exports
+.data/knowledge-graph/
+.data/knowledge.db
+.data/knowledge.db-shm
+.data/knowledge.db-wal
+.data/backups/
+
+# Track knowledge exports (git-reviewable JSON)
+!.data/
+!.data/knowledge-export/
+!.data/knowledge-config.json
+
+# Coding infrastructure runtime files (auto-added by coding startup)
+.constraint-monitor.yaml
+.claude/settings.local.json
+.health/
+.logs/
+logs/
+!.specstory/history/logs/
+*.log
+.specstory/validation-report.json
+.specstory/change-log.json

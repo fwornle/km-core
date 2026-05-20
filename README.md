@@ -8,13 +8,13 @@ Shared knowledge-management core: canonical `Entity` / `Relation` types, a `Grap
 
 ```mermaid
 flowchart TB
-  consumer[Consumer App<br/>coding / OKM / future] -->|imports| api[KM-Core Public API<br/>Entity, Relation, EntityId, GraphKMStore]
-  api --> store[GraphKMStore<br/>extends EventEmitter]
-  store --> mem[Graphology<br/>MultiDirectedGraph<br/>in-memory]
-  store --> db[(LevelDB<br/>classic-level<br/>durable)]
-  store --> export[JSON Exporter<br/>5s debounce<br/>atomic temp+rename]
-  export --> files[(.data/exports/<br/>{domain}.json<br/>git-tracked)]
-  store -.emits.-> events[entity:put / entity:delete<br/>relation:added / relation:removed]
+  consumer["Consumer App\ncoding / OKM / future"] -->|imports| api["KM-Core Public API\nEntity, Relation, EntityId, GraphKMStore"]
+  api --> store["GraphKMStore\nextends EventEmitter"]
+  store --> mem["Graphology\nMultiDirectedGraph\nin-memory"]
+  store --> db[("LevelDB\nclassic-level\ndurable")]
+  store --> export["JSON Exporter\n5s debounce\natomic temp+rename"]
+  export --> files[(".data/exports/\n{domain}.json\ngit-tracked")]
+  store -.emits.-> events["entity:put / entity:delete\nrelation:added / relation:removed"]
   events -.subscribed by.-> consumer
 ```
 
