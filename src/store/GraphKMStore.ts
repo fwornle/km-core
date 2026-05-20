@@ -68,8 +68,10 @@ import { PersistenceManager } from './persistence.js';
 import { Exporter } from './exporter.js';
 import {
   noopOntologyValidator,
+  registryBackedValidator,
   type OntologyValidator,
 } from '../validation/ontology.js';
+import { OntologyRegistry } from '../ontology/registry.js';
 import type {
   Entity,
   Relation,
@@ -100,6 +102,22 @@ export interface GraphKMStoreOptions {
    *  validator from `noopOntologyValidator`; Phase 38 wires a strict
    *  registry-backed validator. */
   ontologyValidator?: OntologyValidator;
+  /** Directory containing upper.json + lower ontology JSON files
+   *  (Phase 38, D-28). When set, GraphKMStore instantiates an
+   *  OntologyRegistry internally and auto-wires it as the validator
+   *  (unless `ontologyValidator` is ALSO set, which takes precedence —
+   *  allows tests to inject stubs).
+   *
+   *  Default behavior when omitted: no registry; falls back to
+   *  `ontologyValidator` or `noopOntologyValidator`. km-core does NOT
+   *  default to `<cwd>/ontology/` — D-28 forbids env-var/cwd pickup
+   *  buried in helper code. Consumers wire defaults at the call site
+   *  (e.g. `ontologyDir: process.env.KM_ONTOLOGY_DIR ?? './ontology'`). */
+  ontologyDir?: string;
+  /** When true, treats malformed lower-ontology files as fatal
+   *  (re-throws) instead of skip+warn. Default false (atomic-build per
+   *  D-29). Forwarded to `OntologyRegistry({ strict })`. */
+  ontologyStrict?: boolean;
 }
 
 /**
@@ -119,6 +137,7 @@ export class GraphKMStore extends EventEmitter {
   private persistence: PersistenceManager;
   private exporter: Exporter;
   private validator: OntologyValidator;
+  private readonly registry: OntologyRegistry | undefined;
   private initialized = false;
 
   constructor(opts: GraphKMStoreOptions) {
@@ -132,7 +151,43 @@ export class GraphKMStore extends EventEmitter {
       domains: opts.domains,
       debounceMs: opts.debounceMs,
     });
-    this.validator = opts.ontologyValidator ?? noopOntologyValidator;
+
+    // Phase 38: Ontology registry (D-28 — constructor-injected, no env pickup).
+    // Build the registry FIRST so the auto-wired validator below can reference it.
+    if (opts.ontologyDir !== undefined) {
+      this.registry = new OntologyRegistry({
+        ontologyDir: opts.ontologyDir,
+        strict: opts.ontologyStrict ?? false,
+      });
+    } else {
+      this.registry = undefined;
+    }
+
+    // Validator resolution order (most-specific wins):
+    //   1. Explicit opts.ontologyValidator (test stubs, custom validators)
+    //   2. Auto-wired registry-backed validator (when ontologyDir is set)
+    //   3. noopOntologyValidator (legacy / unconfigured default — Phase 37)
+    this.validator =
+      opts.ontologyValidator
+      ?? (this.registry ? registryBackedValidator(this.registry) : noopOntologyValidator);
+  }
+
+  /**
+   * Read-only access to the OntologyRegistry instance. Returns undefined when
+   * `ontologyDir` was not supplied at construction time (legacy / unconfigured
+   * stores keep the Phase 37 noop-validator default).
+   *
+   * Use cases (Phase 39+):
+   *   - await store.ontology?.reload() — pick up new ontology files (D-29)
+   *   - store.ontology?.getAllClassNames() — enumerate valid classes for UI
+   *   - store.ontology?.parentChainOf(class) — extension provenance traversal
+   *   - store.ontology?.domains — set of loaded ontology domain names
+   *
+   * The validator field itself stays private; the registry is the consumer-
+   * facing API. The validator is internal plumbing.
+   */
+  get ontology(): OntologyRegistry | undefined {
+    return this.registry;
   }
 
   /**
