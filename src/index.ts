@@ -42,8 +42,14 @@ export type {
 } from './events/types.js';
 
 // Pluggable ontology validator (D-19); v0.1 default is no-op.
+// Phase 38 (ONTO-01/02): registryBackedValidator factory bridges the Phase 37
+// pluggable-validator surface to the Phase 38 OntologyRegistry. Plan 38-05
+// auto-wires this factory inside the GraphKMStore constructor when
+// GraphKMStoreOptions.ontologyDir is set; standalone-usable for consumers
+// that manage the registry lifecycle externally.
 export type { OntologyValidator } from './validation/ontology.js';
 export { noopOntologyValidator } from './validation/ontology.js';
+export { registryBackedValidator } from './validation/ontology.js';
 
 // Phase 38 (ONTO-01/02): OntologyRegistry — auto-discovers upper.json + sibling
 // lower-ontology .json files in a configured directory, resolves per-class
