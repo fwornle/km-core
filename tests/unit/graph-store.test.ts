@@ -19,6 +19,7 @@ import {
   type GraphKMStoreOptions,
   type ProvenanceStamp,
   type EntityProvenance,
+  type EntityId,
 } from '../../src/index.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -448,5 +449,258 @@ describe('Phase 39 — writer-side stamping (D-30/D-31/D-32)', () => {
     // Trusted path does NOT auto-stamp metadata.provenance — caller's
     // responsibility (Phase 39 backfill pre-stamps before invoking this path).
     expect(got!.metadata?.provenance).toBeUndefined();
+  });
+});
+
+// Phase 39 Plan 03 Task 2 — APPENDED tests for D-33 supersession closure,
+// D-34 active-only filter (default + opt-in), D-35 getSupersessionChain.
+// Sibling describe block — do NOT modify the 5 Plan-01 tests above. Plan 03
+// must add 11 tests total: 10 for the new D-33/D-34/D-35 behaviors plus the
+// Pitfall 1 regression guard for the validUntil === undefined short-circuit.
+describe('Phase 39 — supersession + active-only filter (D-33/D-34/D-35)', () => {
+  let ctx: Ctx;
+
+  // Per-test provenance factory: suffix-bearing runId distinguishes the
+  // pre/post writes when asserting confirmationCount / supersession order.
+  function mkProvenance(suffix: string): ProvenanceStamp {
+    return {
+      provider: 'test',
+      model: 'test-model',
+      runId: `run-${suffix}`,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  beforeEach(async () => {
+    ctx = makeStore();
+    await ctx.store.open();
+  });
+
+  afterEach(async () => {
+    await ctx.store.close();
+    fs.rmSync(ctx.tmpdir, { recursive: true, force: true });
+  });
+
+  test('putEntity with supersedes closes predecessor validUntil atomically (D-33)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    const bId = await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component', supersedes: aId },
+      { provenance: mkProvenance('B') },
+    );
+    const a = await ctx.store.getEntity(aId);
+    const b = await ctx.store.getEntity(bId);
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a!.validUntil).toBeDefined();
+    expect(a!.validUntil).toBe(b!.validFrom);
+  });
+
+  test('putEntity with supersedes adds a SUPERSEDED_BY relation (D-33 reverse-edge)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    const bId = await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component', supersedes: aId },
+      { provenance: mkProvenance('B') },
+    );
+    const rels = await ctx.store.findRelations({ type: 'SUPERSEDED_BY' });
+    expect(rels.length).toBe(1);
+    expect(rels[0]!.from).toBe(aId);
+    expect(rels[0]!.to).toBe(bId);
+  });
+
+  test('putEntity with supersedes emits entity:put for BOTH old and new (D-33 batch atomicity)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    // Spy AFTER A is created so we only see the supersession-batch events.
+    const handler = vi.fn();
+    ctx.store.on('entity:put', handler);
+    await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component', supersedes: aId },
+      { provenance: mkProvenance('B') },
+    );
+    // batch([put closedOld, put newEntity]) fires entity:put twice.
+    expect(handler.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('putEntity with supersedes warns when predecessor validUntil already set (D-33 stderr-warn)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    // Manually pre-stamp validUntil on A via mergeAttributes (T-37-04-06
+    // accepted; mergeAttributes does NOT re-run ontology / provenance).
+    await ctx.store.mergeAttributes(aId, {
+      validUntil: '2026-04-01T00:00:00.000Z',
+    });
+    const stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+    try {
+      await ctx.store.putEntity(
+        { name: 'B', entityType: 'Component', supersedes: aId },
+        { provenance: mkProvenance('B') },
+      );
+      const writes = stderrSpy.mock.calls.map((c) => String(c[0]));
+      expect(
+        writes.some((w) => /overwriting validUntil/.test(w)),
+      ).toBe(true);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  test('putEntity confirm-write with supersedes set is a silent no-op on supersession branch (D-33 + OQ#4 resolution)', async () => {
+    // Create A and B independently (no supersedes between them).
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    const bId = await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component' },
+      { provenance: mkProvenance('B') },
+    );
+    // Confirm-write A with supersedes: bId set. Per OQ#4: predecessor
+    // closure + SUPERSEDED_BY fire ONLY on the create branch (guarded by
+    // `!existing`). The confirm-write itself (lastConfirmedBy /
+    // confirmationCount) still happens.
+    await ctx.store.putEntity(
+      { id: aId, name: 'A', entityType: 'Component', supersedes: bId },
+      { provenance: mkProvenance('A2') },
+    );
+    // (1) A's validUntil is NOT closed by its own re-write.
+    const a = await ctx.store.getEntity(aId);
+    expect(a!.validUntil).toBeUndefined();
+    // (2) B is untouched — no backward closure fired against B.
+    const b = await ctx.store.getEntity(bId);
+    expect(b!.validUntil).toBeUndefined();
+    // (3) No SUPERSEDED_BY edge in either direction.
+    const rels = await ctx.store.findRelations({ type: 'SUPERSEDED_BY' });
+    expect(rels.length).toBe(0);
+    // (4) The confirm-write itself succeeded: lastConfirmedBy = run-A2.
+    const prov = a!.metadata.provenance as EntityProvenance | undefined;
+    expect(prov).toBeDefined();
+    expect(prov!.lastConfirmedBy.runId).toBe('run-A2');
+    // (5) confirmationCount incremented to 2 (first-write was run-A).
+    expect(prov!.confirmationCount).toBe(2);
+  });
+
+  test('findByOntologyClass excludes superseded entities by default (D-34)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component', supersedes: aId },
+      { provenance: mkProvenance('B') },
+    );
+    const found = await ctx.store.findByOntologyClass('Component');
+    const names = found.map((e) => e.name);
+    expect(names).toContain('B');
+    expect(names).not.toContain('A');
+  });
+
+  test('findByOntologyClass with includeSuperseded:true returns history (D-34 opt-in)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component', supersedes: aId },
+      { provenance: mkProvenance('B') },
+    );
+    const found = await ctx.store.findByOntologyClass('Component', {
+      includeSuperseded: true,
+    });
+    const names = found.map((e) => e.name).sort();
+    expect(names).toEqual(['A', 'B']);
+  });
+
+  test('iterate excludes superseded entities by default (D-34)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component', supersedes: aId },
+      { provenance: mkProvenance('B') },
+    );
+    const yielded: string[] = [];
+    for await (const e of ctx.store.iterate()) yielded.push(e.name);
+    expect(yielded).toEqual(['B']);
+  });
+
+  test('iterate with includeSuperseded:true returns history (D-34 opt-in)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component', supersedes: aId },
+      { provenance: mkProvenance('B') },
+    );
+    const yielded: string[] = [];
+    for await (const e of ctx.store.iterate(undefined, {
+      includeSuperseded: true,
+    })) {
+      yielded.push(e.name);
+    }
+    expect(yielded.sort()).toEqual(['A', 'B']);
+  });
+
+  test('getSupersessionChain returns ordered chain from origin through tip (D-35)', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    const bId = await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component', supersedes: aId },
+      { provenance: mkProvenance('B') },
+    );
+    const cId = await ctx.store.putEntity(
+      { name: 'C', entityType: 'Component', supersedes: bId },
+      { provenance: mkProvenance('C') },
+    );
+    // Walking from the MIDDLE of the chain should still return all three,
+    // ordered by validFrom ascending: [A, B, C].
+    const chain = await ctx.store.getSupersessionChain(bId);
+    expect(chain.length).toBe(3);
+    expect(chain.map((e) => e.id)).toEqual([aId, bId, cId]);
+    expect(chain.map((e) => e.name)).toEqual(['A', 'B', 'C']);
+    // validFrom ascending: A.validFrom <= B.validFrom <= C.validFrom.
+    expect(new Date(chain[0]!.validFrom!).getTime()).toBeLessThanOrEqual(
+      new Date(chain[1]!.validFrom!).getTime(),
+    );
+    expect(new Date(chain[1]!.validFrom!).getTime()).toBeLessThanOrEqual(
+      new Date(chain[2]!.validFrom!).getTime(),
+    );
+  });
+
+  test('getSupersessionChain on entity not in graph returns empty array (D-35)', async () => {
+    const result = await ctx.store.getSupersessionChain(
+      'nonexistent-uuid' as unknown as EntityId,
+    );
+    expect(result.length).toBe(0);
+  });
+
+  test('findByOntologyClass returns entities without validUntil (Phase 37/38 BC preserved)', async () => {
+    // Pitfall 1 regression guard: entities with validUntil === undefined
+    // MUST pass the active-only filter unconditionally. This is the
+    // short-circuit that keeps the Phase 37/38 `findByOntologyClass
+    // returns only entities matching the class` test green.
+    await ctx.store.putEntity(
+      { name: 'NoValidUntil', entityType: 'Component' },
+      { provenance: mkProvenance('NV') },
+    );
+    const found = await ctx.store.findByOntologyClass('Component');
+    expect(found.length).toBe(1);
+    expect(found[0]!.name).toBe('NoValidUntil');
+    expect(found[0]!.validUntil).toBeUndefined();
   });
 });
