@@ -1,0 +1,92 @@
+{
+  "meta": {
+    "name": "raas",
+    "version": "1.0.0",
+    "extends": "upper",
+    "description": "RaaS domain-specific lower ontology - Rendering as a Service concepts"
+  },
+  "classes": {
+    "ArgoWorkflow": {
+      "extends": "Pipeline",
+      "defaultLayer": "evidence",
+      "description": "An Argo-managed workflow orchestrating RaaS processing steps",
+      "relationships": {
+        "RUNS_ON": ["Infrastructure"],
+        "TRIGGERS": ["Job"]
+      },
+      "properties": {
+        "workflowName": { "type": "string", "required": true },
+        "namespace": { "type": "string" },
+        "cronSchedule": { "type": "string" }
+      }
+    },
+    "DataQualityCheck": {
+      "defaultLayer": "evidence",
+      "description": "A validation step checking data quality in RaaS pipelines",
+      "relationships": {
+        "VALIDATES": ["DataAsset"],
+        "PART_OF": ["Pipeline"],
+        "PRODUCES": ["DataAsset"]
+      },
+      "properties": {
+        "checkName": { "type": "string", "required": true },
+        "threshold": { "type": "number" },
+        "result": { "type": "string", "enum": ["pass", "fail", "warning"] }
+      }
+    },
+    "RPU": {
+      "extends": "Component",
+      "defaultLayer": "evidence",
+      "description": "Rendering Processing Unit - atomic execution unit in RaaS",
+      "relationships": {
+        "HAS_TYPE": ["RPUType"],
+        "HAS_VERSION": ["RPUVersion"],
+        "RUNS_ON": ["Node"],
+        "PROCESSES": ["DataAsset"]
+      },
+      "properties": {
+        "rpuId": { "type": "string", "required": true },
+        "gpuType": { "type": "string" },
+        "memoryGB": { "type": "number" }
+      }
+    },
+    "RPUType": {
+      "defaultLayer": "evidence",
+      "description": "A category of RPU with specific hardware capabilities",
+      "relationships": {
+        "USED_BY": ["RPU"]
+      },
+      "properties": {
+        "typeName": { "type": "string", "required": true },
+        "gpuModel": { "type": "string" },
+        "capabilities": { "type": "string" }
+      }
+    },
+    "RPUVersion": {
+      "defaultLayer": "evidence",
+      "description": "A software version deployed on RPU instances",
+      "relationships": {
+        "DEPLOYED_ON": ["RPU"],
+        "SUPERSEDES": ["RPUVersion"]
+      },
+      "properties": {
+        "versionTag": { "type": "string", "required": true },
+        "releaseDate": { "type": "string", "format": "datetime" }
+      }
+    },
+    "S3DataPath": {
+      "extends": "DataAsset",
+      "defaultLayer": "evidence",
+      "description": "An S3 bucket path storing RaaS data assets",
+      "relationships": {
+        "REPLICATED_TO": ["S3DataPath"],
+        "ACCESSED_BY": ["RPU", "ArgoWorkflow"]
+      },
+      "properties": {
+        "bucket": { "type": "string", "required": true },
+        "prefix": { "type": "string", "required": true },
+        "region": { "type": "string" }
+      }
+    }
+  }
+}

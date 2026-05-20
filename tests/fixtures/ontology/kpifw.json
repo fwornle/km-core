@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "name": "kpifw",
+    "version": "2.0.0",
+    "extends": "upper",
+    "description": "KPI-FW domain-specific lower ontology - KPI Framework concepts"
+  },
+  "classes": {
+    "GrafanaDashboard": {
+      "defaultLayer": "evidence",
+      "description": "A Grafana or RDS monitoring dashboard displaying KPI metrics and pipeline health",
+      "relationships": {
+        "DISPLAYS": ["KPIDefinition"],
+        "SOURCES_FROM": ["DataAsset"],
+        "MONITORS": ["KPIPipeline", "Service"]
+      },
+      "properties": {
+        "dashboardName": { "type": "string", "required": true },
+        "url": { "type": "string" },
+        "datasource": { "type": "string" }
+      }
+    },
+    "KPIDefinition": {
+      "defaultLayer": "evidence",
+      "description": "A named KPI metric with target threshold, computation method, and owner",
+      "relationships": {
+        "COMPUTED_BY": ["KPIPipeline"],
+        "MEASURED_ON": ["DataAsset"],
+        "VISUALIZED_IN": ["GrafanaDashboard"],
+        "OWNED_BY": ["Service", "Component"]
+      },
+      "properties": {
+        "kpiName": { "type": "string", "required": true },
+        "threshold": { "type": "number" },
+        "unit": { "type": "string" },
+        "target": { "type": "string" },
+        "owner": { "type": "string" }
+      }
+    },
+    "KPIPipeline": {
+      "extends": "Pipeline",
+      "defaultLayer": "evidence",
+      "description": "A pipeline specifically orchestrating KPI computation workflows",
+      "relationships": {
+        "COMPUTES": ["DataAsset", "KPIDefinition"],
+        "SOURCES_FROM": ["Service", "Component"],
+        "PUBLISHES_TO": ["DataAsset", "GrafanaDashboard"]
+      },
+      "properties": {
+        "kpiName": { "type": "string", "required": true },
+        "refreshInterval": { "type": "string" },
+        "owner": { "type": "string" }
+      }
+    },
+    "MetricsAggregation": {
+      "extends": "Step",
+      "defaultLayer": "evidence",
+      "description": "A processing step that aggregates extracted metrics over time windows",
+      "relationships": {
+        "AGGREGATES": ["DataAsset"],
+        "PRODUCES": ["DataAsset"],
+        "SCOPED_TO": ["Session"]
+      },
+      "properties": {
+        "aggregationMethod": { "type": "string", "required": true, "enum": ["sum", "avg", "min", "max", "p50", "p95", "p99"] },
+        "granularity": { "type": "string" }
+      }
+    },
+    "SignalExtraction": {
+      "extends": "Step",
+      "defaultLayer": "evidence",
+      "description": "A processing step that extracts signals from raw metric data",
+      "relationships": {
+        "EXTRACTS_FROM": ["DataAsset"],
+        "PRODUCES": ["DataAsset"],
+        "FEEDS": ["MetricsAggregation"]
+      },
+      "properties": {
+        "signalType": { "type": "string", "required": true },
+        "samplingRate": { "type": "number" },
+        "filterCriteria": { "type": "string" }
+      }
+    }
+  }
+}

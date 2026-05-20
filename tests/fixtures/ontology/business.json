@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "name": "business",
+    "version": "1.0.0",
+    "extends": "upper",
+    "description": "Business knowledge ontology - decisions, requirements, risks, actions, and document sources"
+  },
+  "classes": {
+    "Decision": {
+      "defaultLayer": "pattern",
+      "description": "An architectural or operational decision with rationale and scope",
+      "relationships": {
+        "SUPERSEDES": ["Decision", "Resolution"],
+        "APPLIES_TO": ["Component", "Service", "Pipeline"],
+        "DOCUMENTED_IN": ["DocumentSource"],
+        "ADDRESSES": ["Risk"]
+      },
+      "properties": {
+        "title": { "type": "string", "required": true },
+        "rationale": { "type": "string" },
+        "status": { "type": "string", "enum": ["proposed", "accepted", "deprecated", "superseded"] },
+        "decisionDate": { "type": "string", "format": "datetime" }
+      }
+    },
+    "Requirement": {
+      "defaultLayer": "pattern",
+      "description": "A functional or non-functional requirement traced from an external system (CodeBeamer, Jira)",
+      "relationships": {
+        "IMPLEMENTED_BY": ["Component", "Service"],
+        "VERIFIED_BY": ["Step", "Job"],
+        "DOCUMENTED_IN": ["DocumentSource"],
+        "DEPENDS_ON": ["Requirement"]
+      },
+      "properties": {
+        "externalId": { "type": "string", "required": true },
+        "source": { "type": "string", "enum": ["codebeamer", "jira", "confluence"] },
+        "status": { "type": "string", "enum": ["draft", "approved", "implemented", "verified"] },
+        "priority": { "type": "string", "enum": ["critical", "high", "medium", "low"] }
+      }
+    },
+    "Risk": {
+      "defaultLayer": "pattern",
+      "description": "An identified risk to operations, quality, or delivery",
+      "relationships": {
+        "AFFECTS": ["Component", "Service", "Pipeline"],
+        "MITIGATED_BY": ["Decision", "Resolution"],
+        "DOCUMENTED_IN": ["DocumentSource"]
+      },
+      "properties": {
+        "riskName": { "type": "string", "required": true },
+        "likelihood": { "type": "string", "enum": ["high", "medium", "low"] },
+        "impact": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+        "status": { "type": "string", "enum": ["open", "mitigated", "accepted", "closed"] }
+      }
+    },
+    "ActionItem": {
+      "defaultLayer": "evidence",
+      "description": "A tracked action item or task arising from meetings, RCAs, or reviews",
+      "relationships": {
+        "ASSIGNED_TO": ["Component", "Service"],
+        "ADDRESSES": ["Risk", "Incident"],
+        "CREATED_FROM": ["DocumentSource"]
+      },
+      "properties": {
+        "title": { "type": "string", "required": true },
+        "externalId": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "in_progress", "done", "cancelled"] },
+        "dueDate": { "type": "string", "format": "datetime" }
+      }
+    },
+    "DocumentSource": {
+      "defaultLayer": "evidence",
+      "description": "An external document that feeds knowledge into the OKB (Confluence page, MkDocs page, ADR)",
+      "relationships": {
+        "DESCRIBES": ["Component", "Service", "Pipeline"],
+        "CONTAINS": ["Decision", "Requirement", "Risk"]
+      },
+      "properties": {
+        "sourceType": { "type": "string", "required": true, "enum": ["confluence", "mkdocs", "adr", "codebeamer", "jira"] },
+        "externalId": { "type": "string", "required": true },
+        "url": { "type": "string" },
+        "title": { "type": "string" },
+        "lastUpdated": { "type": "string", "format": "datetime" }
+      }
+    }
+  }
+}

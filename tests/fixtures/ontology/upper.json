@@ -1,0 +1,207 @@
+{
+  "meta": {
+    "name": "upper",
+    "version": "2.0.0",
+    "description": "Upper ontology v2 - streamlined execution and failure model (13 classes, down from 22)"
+  },
+  "classes": {
+    "Component": {
+      "defaultLayer": "evidence",
+      "description": "A software component, module, or affected subsystem within the platform",
+      "relationships": {
+        "PART_OF": ["Service"],
+        "DEPENDS_ON": ["Component"],
+        "RUNS_ON": ["Infrastructure"],
+        "AFFECTS": ["Incident"]
+      },
+      "properties": {
+        "componentName": { "type": "string", "required": true },
+        "version": { "type": "string" },
+        "impactLevel": { "type": "string", "enum": ["full-outage", "degraded", "intermittent", "minor"] }
+      }
+    },
+    "DataAsset": {
+      "defaultLayer": "evidence",
+      "description": "A dataset, file, table, stream, or data flow between components",
+      "relationships": {
+        "STORED_IN": ["Infrastructure"],
+        "PRODUCED_BY": ["Pipeline", "Job"],
+        "CONSUMED_BY": ["Pipeline", "Job"],
+        "FLOWS_TO": ["Component", "Service"]
+      },
+      "properties": {
+        "assetName": { "type": "string", "required": true },
+        "format": { "type": "string" },
+        "sizeBytes": { "type": "number" },
+        "protocol": { "type": "string" }
+      }
+    },
+    "Infrastructure": {
+      "defaultLayer": "evidence",
+      "description": "Physical or cloud infrastructure: clusters, nodes, containers, and regions",
+      "relationships": {
+        "HOSTS": ["Service", "Component"],
+        "LOCATED_IN": ["Infrastructure"],
+        "CONTAINS": ["Infrastructure"]
+      },
+      "properties": {
+        "infraType": { "type": "string", "enum": ["ec2", "ecs", "eks", "lambda", "on-prem", "node", "container", "region"] },
+        "provider": { "type": "string" },
+        "region": { "type": "string" },
+        "capacity": { "type": "string" }
+      }
+    },
+    "Job": {
+      "defaultLayer": "evidence",
+      "description": "A discrete unit of work within a session, composed of steps",
+      "relationships": {
+        "CONTAINS": ["Step"],
+        "RUNS_ON": ["Infrastructure"],
+        "PART_OF": ["Pipeline"],
+        "USES": ["DataAsset"]
+      },
+      "properties": {
+        "jobId": { "type": "string", "required": true },
+        "jobType": { "type": "string" },
+        "startTime": { "type": "string", "format": "datetime" },
+        "endTime": { "type": "string", "format": "datetime" },
+        "status": { "type": "string", "enum": ["pending", "running", "completed", "failed"] }
+      }
+    },
+    "Pipeline": {
+      "defaultLayer": "evidence",
+      "description": "An orchestrated sequence of jobs forming a workflow",
+      "relationships": {
+        "CONTAINS": ["Job"],
+        "MANAGED_BY": ["Service"],
+        "PRODUCES": ["DataAsset"]
+      },
+      "properties": {
+        "pipelineName": { "type": "string", "required": true },
+        "version": { "type": "string" },
+        "schedule": { "type": "string" }
+      }
+    },
+    "Service": {
+      "defaultLayer": "evidence",
+      "description": "A deployed service providing functionality",
+      "relationships": {
+        "DEPENDS_ON": ["Service"],
+        "RUNS_ON": ["Infrastructure"],
+        "CONTAINS": ["Component"]
+      },
+      "properties": {
+        "serviceName": { "type": "string", "required": true },
+        "endpoint": { "type": "string" },
+        "status": { "type": "string", "enum": ["healthy", "degraded", "down"] }
+      }
+    },
+    "Session": {
+      "defaultLayer": "evidence",
+      "description": "A user-initiated execution session spanning one or more jobs",
+      "relationships": {
+        "CONTAINS": ["Job"],
+        "RUNS_IN": ["Infrastructure"]
+      },
+      "properties": {
+        "sessionId": { "type": "string", "required": true },
+        "startTime": { "type": "string", "format": "datetime" },
+        "endTime": { "type": "string", "format": "datetime" },
+        "status": { "type": "string", "enum": ["running", "completed", "failed"] },
+        "region": { "type": "string" }
+      }
+    },
+    "Step": {
+      "defaultLayer": "evidence",
+      "description": "An atomic operation within a job",
+      "relationships": {
+        "RUNS_ON": ["Infrastructure"],
+        "DEPENDS_ON": ["Step"],
+        "READS": ["DataAsset"],
+        "WRITES": ["DataAsset"]
+      },
+      "properties": {
+        "stepName": { "type": "string", "required": true },
+        "duration": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "running", "completed", "failed", "skipped"] }
+      }
+    },
+    "FailurePattern": {
+      "defaultLayer": "pattern",
+      "description": "A named recurring failure signature linking multiple incidents for pattern recognition",
+      "relationships": {
+        "MATCHES": ["Incident", "RootCause"],
+        "OBSERVED_IN": ["Component", "Service"]
+      },
+      "properties": {
+        "patternName": { "type": "string", "required": true },
+        "frequency": { "type": "number" },
+        "lastSeen": { "type": "string", "format": "datetime" },
+        "confidence": { "type": "number" }
+      }
+    },
+    "Incident": {
+      "defaultLayer": "evidence",
+      "description": "A specific failure event with severity, time window, and affected scope",
+      "relationships": {
+        "HAS_ROOT_CAUSE": ["RootCause"],
+        "HAS_SYMPTOM": ["Symptom"],
+        "AFFECTS": ["Component", "Service", "Infrastructure"],
+        "RESOLVED_BY": ["Resolution"]
+      },
+      "properties": {
+        "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+        "occurredAt": { "type": "string", "format": "datetime" },
+        "resolvedAt": { "type": "string", "format": "datetime" },
+        "title": { "type": "string", "required": true },
+        "timeWindowStart": { "type": "string", "format": "datetime" },
+        "timeWindowEnd": { "type": "string", "format": "datetime" }
+      }
+    },
+    "Resolution": {
+      "defaultLayer": "pattern",
+      "description": "A fix, mitigation, or workaround applied to resolve or reduce incident impact",
+      "relationships": {
+        "RESOLVES": ["Incident"],
+        "MITIGATES": ["Incident"],
+        "APPLIED_TO": ["Component", "Service", "Infrastructure"],
+        "SUPERSEDES": ["Resolution"]
+      },
+      "properties": {
+        "resolutionType": { "type": "string", "enum": ["permanent", "mitigation", "workaround"] },
+        "resolvedAt": { "type": "string", "format": "datetime" },
+        "description": { "type": "string", "required": true },
+        "limitations": { "type": "string" },
+        "isTemporary": { "type": "boolean" }
+      }
+    },
+    "RootCause": {
+      "defaultLayer": "pattern",
+      "description": "The underlying cause of an incident",
+      "relationships": {
+        "CAUSED": ["Incident"],
+        "LOCATED_IN": ["Component", "Service", "Infrastructure"],
+        "MATCHES": ["FailurePattern"]
+      },
+      "properties": {
+        "category": { "type": "string" },
+        "description": { "type": "string", "required": true }
+      }
+    },
+    "Symptom": {
+      "defaultLayer": "evidence",
+      "description": "An observable indicator or business impact of a problem",
+      "relationships": {
+        "OBSERVED_IN": ["Component", "Service", "Infrastructure"],
+        "INDICATES": ["RootCause"],
+        "CAUSED_BY": ["Incident"]
+      },
+      "properties": {
+        "symptomType": { "type": "string", "enum": ["error", "latency", "resource", "data", "behavioral", "business-impact"] },
+        "impactType": { "type": "string", "enum": ["revenue", "user-facing", "internal", "data-loss", "compliance"] },
+        "magnitude": { "type": "string" },
+        "description": { "type": "string", "required": true }
+      }
+    }
+  }
+}
