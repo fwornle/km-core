@@ -333,3 +333,120 @@ describe('GraphKMStore', () => {
     expect(id).toBe('not-a-uuid');
   });
 });
+
+// Phase 39 Plan 01 Task 2 — APPENDED tests for D-30/D-31/D-32 writer-side
+// stamping. DO NOT modify the 13 GraphKMStore tests above. These five tests
+// stand in their own describe block so the test count is grep-verifiable
+// (must_haves: 5+ new tests appended; 33 baseline preserved).
+describe('Phase 39 — writer-side stamping (D-30/D-31/D-32)', () => {
+  let ctx: Ctx;
+
+  // Per-test provenance factory: each test constructs its own stamp with a
+  // suffix-bearing runId so D-32 create-vs-confirm assertions can distinguish
+  // first-write provenance from subsequent confirmations.
+  function mkProvenance(suffix: string): ProvenanceStamp {
+    return {
+      provider: 'test',
+      model: 'test-model',
+      runId: `run-${suffix}`,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  beforeEach(async () => {
+    ctx = makeStore();
+    await ctx.store.open();
+  });
+
+  afterEach(async () => {
+    await ctx.store.close();
+    fs.rmSync(ctx.tmpdir, { recursive: true, force: true });
+  });
+
+  test('putEntity auto-stamps validFrom when caller omits it (D-31)', async () => {
+    const beforeMs = Date.now();
+    const id = await ctx.store.putEntity(
+      { name: 'AutoStamp', entityType: 'Component' },
+      { provenance: mkProvenance('1') },
+    );
+    const got = await ctx.store.getEntity(id);
+    expect(got).toBeDefined();
+    expect(got!.validFrom).toBeDefined();
+    const validFromMs = new Date(got!.validFrom!).getTime();
+    // Within 5 seconds of "now" — generous bound to avoid flaky CI clocks.
+    expect(validFromMs).toBeGreaterThanOrEqual(beforeMs);
+    expect(validFromMs).toBeLessThanOrEqual(beforeMs + 5000);
+  });
+
+  test('putEntity sets EntityProvenance from provenance opt on first write (D-30, D-32)', async () => {
+    const stamp = mkProvenance('1');
+    const id = await ctx.store.putEntity(
+      { name: 'FirstWrite', entityType: 'Component' },
+      { provenance: stamp },
+    );
+    const got = await ctx.store.getEntity(id);
+    const prov = got!.metadata.provenance as EntityProvenance | undefined;
+    expect(prov).toBeDefined();
+    expect(prov!.createdBy.runId).toBe('run-1');
+    expect(prov!.lastConfirmedBy.runId).toBe('run-1');
+    expect(prov!.confirmationCount).toBe(1);
+    // Full stamp shape preserved (provider/model/timestamp threaded through).
+    expect(prov!.createdBy.provider).toBe('test');
+    expect(prov!.createdBy.model).toBe('test-model');
+    expect(prov!.createdBy.timestamp).toBe(stamp.timestamp);
+  });
+
+  test('putEntity on existing id increments confirmationCount and preserves createdBy (D-32)', async () => {
+    const supplied = mintEntityId();
+    // First write with run-1.
+    await ctx.store.putEntity(
+      { id: supplied, name: 'Confirmed', entityType: 'Component' },
+      { provenance: mkProvenance('1') },
+    );
+    // Second write with run-2 against the SAME id — should preserve createdBy
+    // from the first write, update lastConfirmedBy, and bump confirmationCount.
+    await ctx.store.putEntity(
+      { id: supplied, name: 'Confirmed', entityType: 'Component' },
+      { provenance: mkProvenance('2') },
+    );
+    const got = await ctx.store.getEntity(supplied);
+    const prov = got!.metadata.provenance as EntityProvenance | undefined;
+    expect(prov).toBeDefined();
+    expect(prov!.createdBy.runId).toBe('run-1'); // preserved from first write
+    expect(prov!.lastConfirmedBy.runId).toBe('run-2'); // overwritten
+    expect(prov!.confirmationCount).toBe(2);
+  });
+
+  test('putEntity throws when provenance missing on strict path (D-30)', async () => {
+    // Empty opts — provenance missing.
+    await expect(
+      ctx.store.putEntity({ name: 'X', entityType: 'Component' }, {}),
+    ).rejects.toThrow(/requires opts\.provenance/);
+    // No opts at all — provenance missing.
+    await expect(
+      ctx.store.putEntity({ name: 'X', entityType: 'Component' }),
+    ).rejects.toThrow(/requires opts\.provenance/);
+  });
+
+  test('putEntity with skipOntologyCheck:true bypasses provenance requirement (BC-2)', async () => {
+    // Trusted-caller path bypasses BOTH ontology validation AND the D-30
+    // provenance requirement. Backfill / fixture replay can pass an
+    // entity without supplying opts.provenance; the store does not assemble
+    // EntityProvenance on the trusted path (caller stamps it themselves).
+    const id = await ctx.store.putEntity(
+      {
+        id: 'legacy-nanoid-key' as unknown as ReturnType<typeof mintEntityId>,
+        name: 'LegacyBulk',
+        entityType: 'NotInRegistry',
+      },
+      { skipOntologyCheck: true },
+    );
+    expect(id).toBe('legacy-nanoid-key');
+    const got = await ctx.store.getEntity(id);
+    expect(got).toBeDefined();
+    expect(got!.name).toBe('LegacyBulk');
+    // Trusted path does NOT auto-stamp metadata.provenance — caller's
+    // responsibility (Phase 39 backfill pre-stamps before invoking this path).
+    expect(got!.metadata?.provenance).toBeUndefined();
+  });
+});
