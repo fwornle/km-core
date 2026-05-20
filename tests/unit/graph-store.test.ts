@@ -17,6 +17,8 @@ import {
   GraphKMStore,
   mintEntityId,
   type GraphKMStoreOptions,
+  type ProvenanceStamp,
+  type EntityProvenance,
 } from '../../src/index.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -25,6 +27,18 @@ import * as path from 'node:path';
 interface OntologyValidatorStub {
   validate: (entityType: string) => void;
 }
+
+// Phase 39 D-30: putEntity strict path requires opts.provenance. A single
+// canonical stamp is reused across all Phase 37/38 tests below so each
+// retains its prior intent (the test asserts CRUD/event/iterate semantics,
+// not provenance); the Phase 39 tests at the END of the file construct
+// their own provenance stamps per-test for D-32 create-vs-confirm logic.
+const PROV: ProvenanceStamp = {
+  provider: 'test',
+  model: 'test-model',
+  runId: 'baseline',
+  timestamp: '2026-05-20T00:00:00.000Z',
+};
 
 type Ctx = {
   store: GraphKMStore;
@@ -56,15 +70,18 @@ describe('GraphKMStore', () => {
   });
 
   test('putEntity then getEntity round-trip preserves all fields', async () => {
-    const id = await ctx.store.putEntity({
-      name: 'Foo',
-      entityType: 'Component',
-      layer: 'evidence',
-      description: 'A test component',
-      createdAt: '2026-05-19T00:00:00Z',
-      updatedAt: '2026-05-19T00:00:00Z',
-      metadata: { domain: 'general' },
-    });
+    const id = await ctx.store.putEntity(
+      {
+        name: 'Foo',
+        entityType: 'Component',
+        layer: 'evidence',
+        description: 'A test component',
+        createdAt: '2026-05-19T00:00:00Z',
+        updatedAt: '2026-05-19T00:00:00Z',
+        metadata: { domain: 'general' },
+      },
+      { provenance: PROV },
+    );
     const got = await ctx.store.getEntity(id);
     expect(got).toBeDefined();
     expect(got!.id).toBe(id);
@@ -72,16 +89,23 @@ describe('GraphKMStore', () => {
     expect(got!.entityType).toBe('Component');
     expect(got!.layer).toBe('evidence');
     expect(got!.description).toBe('A test component');
-    expect(got!.metadata).toEqual({ domain: 'general' });
+    // Phase 39: putEntity now folds EntityProvenance into metadata under
+    // metadata.provenance. The original `domain: 'general'` survives the
+    // spread, alongside the auto-stamped provenance struct.
+    expect(got!.metadata.domain).toBe('general');
+    expect(got!.metadata.provenance).toBeDefined();
   });
 
   test('putEntity with caller-supplied valid UUIDv7 keeps id verbatim', async () => {
     const supplied = mintEntityId();
-    const id = await ctx.store.putEntity({
-      id: supplied,
-      name: 'Bar',
-      entityType: 'Component',
-    });
+    const id = await ctx.store.putEntity(
+      {
+        id: supplied,
+        name: 'Bar',
+        entityType: 'Component',
+      },
+      { provenance: PROV },
+    );
     expect(id).toBe(supplied);
     const got = await ctx.store.getEntity(supplied);
     expect(got!.id).toBe(supplied);
@@ -89,31 +113,40 @@ describe('GraphKMStore', () => {
 
   test('putEntity with caller-supplied invalid id throws SyntaxError', async () => {
     await expect(
-      ctx.store.putEntity({
-        id: 'not-a-uuid' as unknown as ReturnType<typeof mintEntityId>,
-        name: 'Bad',
-        entityType: 'Component',
-      }),
+      ctx.store.putEntity(
+        {
+          id: 'not-a-uuid' as unknown as ReturnType<typeof mintEntityId>,
+          name: 'Bad',
+          entityType: 'Component',
+        },
+        { provenance: PROV },
+      ),
     ).rejects.toThrow(SyntaxError);
   });
 
   test('putEntity emits entity:put event with the stored entity', async () => {
     const handler = vi.fn();
     ctx.store.on('entity:put', handler);
-    const id = await ctx.store.putEntity({
-      name: 'Evt',
-      entityType: 'Component',
-    });
+    const id = await ctx.store.putEntity(
+      {
+        name: 'Evt',
+        entityType: 'Component',
+      },
+      { provenance: PROV },
+    );
     expect(handler).toHaveBeenCalledTimes(1);
     const payload = handler.mock.calls[0]![0] as { entity: { id: string } };
     expect(payload.entity.id).toBe(id);
   });
 
   test('deleteEntity removes node and emits entity:delete', async () => {
-    const id = await ctx.store.putEntity({
-      name: 'ToDelete',
-      entityType: 'Component',
-    });
+    const id = await ctx.store.putEntity(
+      {
+        name: 'ToDelete',
+        entityType: 'Component',
+      },
+      { provenance: PROV },
+    );
     const handler = vi.fn();
     ctx.store.on('entity:delete', handler);
     await ctx.store.deleteEntity(id);
@@ -122,8 +155,14 @@ describe('GraphKMStore', () => {
   });
 
   test('addRelation persists edge and emits relation:added', async () => {
-    const a = await ctx.store.putEntity({ name: 'A', entityType: 'Component' });
-    const b = await ctx.store.putEntity({ name: 'B', entityType: 'Component' });
+    const a = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: PROV },
+    );
+    const b = await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component' },
+      { provenance: PROV },
+    );
     const handler = vi.fn();
     ctx.store.on('relation:added', handler);
     await ctx.store.addRelation({ type: 'CONTAINS', from: a, to: b });
@@ -131,16 +170,22 @@ describe('GraphKMStore', () => {
   });
 
   test('findByOntologyClass returns only entities matching the class', async () => {
-    await ctx.store.putEntity({
-      name: 'P',
-      entityType: 'Project',
-      ontologyClass: 'Project',
-    });
-    await ctx.store.putEntity({
-      name: 'C',
-      entityType: 'Component',
-      ontologyClass: 'Component',
-    });
+    await ctx.store.putEntity(
+      {
+        name: 'P',
+        entityType: 'Project',
+        ontologyClass: 'Project',
+      },
+      { provenance: PROV },
+    );
+    await ctx.store.putEntity(
+      {
+        name: 'C',
+        entityType: 'Component',
+        ontologyClass: 'Component',
+      },
+      { provenance: PROV },
+    );
     const projects = await ctx.store.findByOntologyClass('Project');
     expect(projects.length).toBe(1);
     expect(projects[0]!.name).toBe('P');
@@ -171,9 +216,18 @@ describe('GraphKMStore', () => {
   });
 
   test('iterate yields entities lazily and respects filter', async () => {
-    await ctx.store.putEntity({ name: 'A', entityType: 'Component' });
-    await ctx.store.putEntity({ name: 'B', entityType: 'Pattern' });
-    await ctx.store.putEntity({ name: 'C', entityType: 'Component' });
+    await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: PROV },
+    );
+    await ctx.store.putEntity(
+      { name: 'B', entityType: 'Pattern' },
+      { provenance: PROV },
+    );
+    await ctx.store.putEntity(
+      { name: 'C', entityType: 'Component' },
+      { provenance: PROV },
+    );
     const components: string[] = [];
     for await (const e of ctx.store.iterate({ entityType: 'Component' })) {
       components.push(e.name);
@@ -193,8 +247,14 @@ describe('GraphKMStore', () => {
     };
     ctx = makeStore({ ontologyValidator: validator });
     await ctx.store.open();
+    // Note: ontology validator runs BEFORE the D-30 provenance check, so
+    // an unknown-class throw happens regardless of whether provenance is
+    // supplied. We pass PROV for symmetry with the rest of the suite.
     await expect(
-      ctx.store.putEntity({ name: 'Bogus', entityType: 'Bogus' }),
+      ctx.store.putEntity(
+        { name: 'Bogus', entityType: 'Bogus' },
+        { provenance: PROV },
+      ),
     ).rejects.toThrow(/Unknown ontology class/);
   });
 
@@ -235,13 +295,19 @@ describe('GraphKMStore', () => {
     expect(ctx.store.ontology!.isValidClass('Bogus')).toBe(false);
 
     // Valid class succeeds.
-    const id = await ctx.store.putEntity({ name: 'Valid', entityType: 'Component' });
+    const id = await ctx.store.putEntity(
+      { name: 'Valid', entityType: 'Component' },
+      { provenance: PROV },
+    );
     expect(id).toBeDefined();
 
     // Invalid class is rejected with the Phase 37 verbatim error-text regex
     // (Plan 38-04 contract: `Unknown ontology class: ${entityType}`).
     await expect(
-      ctx.store.putEntity({ name: 'Bogus', entityType: 'Bogus' }),
+      ctx.store.putEntity(
+        { name: 'Bogus', entityType: 'Bogus' },
+        { provenance: PROV },
+      ),
     ).rejects.toThrow(/Unknown ontology class/);
   });
 

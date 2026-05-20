@@ -26,7 +26,12 @@ import type { EntityId } from '../ids/branded.js';
 
 export type Layer = 'evidence' | 'pattern';
 
-/** Tracks which LLM model/run created or last confirmed an entity */
+/** Tracks which LLM model/run created or last confirmed an entity.
+ *  Phase 39 (D-30) writer contract: the caller MUST supply this stamp
+ *  on `GraphKMStore.putEntity({ ... }, { provenance })`; the store
+ *  never invents one. The four fields are non-optional — { provider,
+ *  model, runId, timestamp } — so downstream filters (e.g. `provider:
+ *  'backfill'`) can rely on every stamp being fully populated. */
 export interface ProvenanceStamp {
   provider: string;
   model: string;
@@ -34,7 +39,19 @@ export interface ProvenanceStamp {
   timestamp: string;
 }
 
-/** Provenance tracking stored in Entity.metadata.provenance */
+/** Provenance tracking stored in `Entity.metadata.provenance`.
+ *  Populated by `GraphKMStore.putEntity` per D-32 (create vs confirm
+ *  by id existence in the graph):
+ *    - First write (id absent): `createdBy = lastConfirmedBy =
+ *      opts.provenance`; `confirmationCount = 1`.
+ *    - Subsequent write (id present): `createdBy` is preserved from
+ *      the prior `EntityProvenance` (falls back to `opts.provenance`
+ *      when the prior entity carried none — e.g. a Phase 37 entity
+ *      loaded from a pre-Phase-39 snapshot); `lastConfirmedBy =
+ *      opts.provenance`; `confirmationCount` is incremented.
+ *  The trusted path (`skipOntologyCheck: true`) does NOT auto-assemble
+ *  this struct; bulk-import / backfill callers stamp it themselves
+ *  before invoking `putEntity`. */
 export interface EntityProvenance {
   createdBy: ProvenanceStamp;
   lastConfirmedBy: ProvenanceStamp;
@@ -105,11 +122,26 @@ export interface Entity {
   createdAt: string;
   updatedAt: string;
   metadata: Record<string, unknown>;
-  /** ISO timestamp: when this entity became valid (set at creation time) */
+  /** ISO timestamp: when this entity became valid (set at creation time).
+   *  Phase 39 writer contract (D-31): any entity RETURNED FROM
+   *  `GraphKMStore` on the strict path has `validFrom` populated — the
+   *  store stamps `new Date().toISOString()` when the caller omits it.
+   *  Caller-supplied `validFrom` is preserved verbatim. The trusted path
+   *  (`skipOntologyCheck: true`) preserves caller-supplied undefined —
+   *  bulk-import / backfill callers stamp it themselves. */
   validFrom?: string;
-  /** ISO timestamp: when this entity was superseded or expired (set by supersession or manual expiry) */
+  /** ISO timestamp: when this entity was superseded or expired (set by
+   *  supersession or manual expiry). Phase 39 leaves this OPTIONAL on the
+   *  type but Plan 39-03 lands the supersession closure that auto-stamps
+   *  `validUntil = new.validFrom` on the predecessor when a successor is
+   *  inserted with `supersedes` set. Phase 39 Plan 01 does NOT auto-stamp
+   *  this field — only `validFrom` and the EntityProvenance struct. */
   validUntil?: string;
-  /** When this entity replaced a prior one, the `EntityId` of the predecessor (D-11 delta). */
+  /** When this entity replaced a prior one, the `EntityId` of the
+   *  predecessor (D-11 delta). Plan 39-03 implements the supersession
+   *  closure semantics (auto-set `old.validUntil`, emit `entity:put` for
+   *  both old and new, build the reverse-supersedes edge); Phase 39 Plan
+   *  01 only locks the writer-side provenance + validFrom stamping. */
   supersedes?: EntityId;
   /** Origin-system bridge populated by the Phase 39 backfill (D-13). */
   legacyId?: { system: 'A' | 'B' | 'C'; id: string };

@@ -77,9 +77,10 @@ import type {
   Relation,
   Layer,
   SerializedGraph,
+  EntityProvenance,
 } from '../types/entity.js';
 import type { EntityId } from '../ids/branded.js';
-import type { BatchOp, FilterObject } from './types.js';
+import type { BatchOp, FilterObject, PutEntityOpts } from './types.js';
 
 /**
  * Constructor options for `GraphKMStore`. Object-form per D-14 (NOT
@@ -283,17 +284,43 @@ export class GraphKMStore extends EventEmitter {
    * to pass non-v7 ids verbatim. The plain (non-bulk) path remains
    * strict per CORE-03.
    *
+   * Phase 39 writer-side stamping (D-30/D-31/D-32) lives on the strict
+   * (`!trusted`) path:
+   *   - D-30: `opts.provenance` is REQUIRED — the store throws if it is
+   *     missing. The store never invents a `ProvenanceStamp`.
+   *   - D-31: `validFrom` is stamped from `new Date().toISOString()`
+   *     when the caller omits it; caller-supplied `validFrom` is kept.
+   *   - D-32: create-vs-confirm is decided by `graph.hasNode(id)`. On
+   *     first write the store sets `createdBy = lastConfirmedBy =
+   *     opts.provenance` and `confirmationCount = 1`. On subsequent
+   *     writes for the same id, `createdBy` is preserved,
+   *     `lastConfirmedBy` is overwritten with `opts.provenance`, and
+   *     `confirmationCount` is incremented.
+   *
+   * The trusted path (`skipOntologyCheck: true`) bypasses the D-30
+   * provenance requirement (BC-2 widening preserved). Backfill callers
+   * pre-stamp `entity.metadata.provenance` themselves and pass through
+   * verbatim — the strict-path stamping intentionally does NOT run.
+   *
    * Emits `entity:put` and schedules a debounced export.
    */
   async putEntity(
     e: Partial<Entity> & { name: string; entityType: string },
-    opts?: { skipOntologyCheck?: boolean },
+    opts?: PutEntityOpts,
   ): Promise<EntityId> {
     const trusted = opts?.skipOntologyCheck === true;
 
     // D-19 validation — skipped on the trusted path.
     if (!trusted) {
       this.validator.validate(e.entityType);
+      // D-30: caller MUST supply provenance on the strict path. The
+      // store never invents a ProvenanceStamp; the caller is the source
+      // of truth for { provider, model, runId, timestamp }.
+      if (!opts?.provenance) {
+        throw new Error(
+          'putEntity requires opts.provenance (D-30): caller MUST supply ProvenanceStamp source',
+        );
+      }
     }
 
     // D-10 stamp-or-keep. On the trusted path we use the caller's id
@@ -312,7 +339,8 @@ export class GraphKMStore extends EventEmitter {
 
     // Build the stored entity. On the trusted path, preserve all input
     // fields verbatim (no default-stamping) — fixture round-trip needs
-    // byte-equal canonical output. On the strict path, fill defaults.
+    // byte-equal canonical output. On the strict path, fill defaults
+    // AND apply Phase 39 writer-side stamping (D-31 + D-32).
     let entity: Entity;
     if (trusted) {
       entity = { ...e, id } as Entity;
@@ -327,6 +355,42 @@ export class GraphKMStore extends EventEmitter {
         description: e.description ?? '',
         metadata: e.metadata ?? {},
       } as Entity;
+
+      // D-31: writer stamps validFrom when caller omits it. Caller-supplied
+      // validFrom (e.g. test fixtures, replay) is preserved verbatim.
+      entity.validFrom = entity.validFrom ?? now;
+
+      // D-32: create-vs-confirm by graph.hasNode(id).
+      //   - First write (id absent from graph): createdBy = lastConfirmedBy
+      //     = opts.provenance; confirmationCount = 1.
+      //   - Subsequent write (id present): createdBy preserved from prior
+      //     EntityProvenance (falls back to opts.provenance if prior write
+      //     had no structured provenance — e.g. Phase 37 entities loaded
+      //     from a pre-Phase-39 snapshot); lastConfirmedBy = opts.provenance;
+      //     confirmationCount incremented from prior (or 0 if absent).
+      const existing = this.graph.hasNode(id)
+        ? (this.graph.getNodeAttributes(id) as Entity)
+        : undefined;
+      const existingProv = existing?.metadata?.provenance as
+        | EntityProvenance
+        | undefined;
+      // opts.provenance is non-null on the strict path (D-30 throw above).
+      const stamp = opts!.provenance!;
+      const newProv: EntityProvenance = existing
+        ? {
+            createdBy: existingProv?.createdBy ?? stamp,
+            lastConfirmedBy: stamp,
+            confirmationCount: (existingProv?.confirmationCount ?? 0) + 1,
+          }
+        : {
+            createdBy: stamp,
+            lastConfirmedBy: stamp,
+            confirmationCount: 1,
+          };
+      entity.metadata = {
+        ...(entity.metadata ?? {}),
+        provenance: newProv,
+      };
     }
 
     // Graphology merge (C analog graph-store.ts:71 — but plain UUID
@@ -457,7 +521,12 @@ export class GraphKMStore extends EventEmitter {
     // throws beyond unforeseen Graphology errors (e.g. duplicate keys).
     for (const op of ops) {
       if (op.type === 'putEntity') {
-        await this.putEntity(op.entity);
+        // Phase 39: batch is a trusted sub-path — strict validation runs
+        // in Phase 1 above (validator.validate + parseEntityId), so the
+        // individual putEntity bypasses re-validation AND the D-30
+        // provenance requirement. Phase 42 may widen BatchOp to carry
+        // { provenance } when callers need per-op stamping.
+        await this.putEntity(op.entity, { skipOntologyCheck: true });
       } else if (op.type === 'deleteEntity') {
         await this.deleteEntity(op.id);
       } else if (op.type === 'addRelation') {
