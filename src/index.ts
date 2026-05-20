@@ -74,3 +74,16 @@ export type {
 // per D-39). D-41 monitoring at the 100-segments / 50-confirmations
 // thresholds via `process.stderr.write` (no `console.*`).
 export { mergeDescriptionSegment } from './segments/merge.js';
+
+// Phase 39 (DATA-01/DATA-02): backfillEntityDataModel library function +
+// BackfillOptions + BackfillResolver + BackfillResult types. Per-system
+// migration scripts (Phase 41 / 42 / 43) call this to stamp `validFrom`
+// + synthetic `EntityProvenance` on legacy entities lacking them
+// (D-36 + D-37 + D-38). Idempotent, resumable via atomic checkpoint
+// (CF-D29 temp+rename), supports `dryRun:true`.
+export { backfillEntityDataModel } from './backfill/index.js';
+export type {
+  BackfillOptions,
+  BackfillResolver,
+  BackfillResult,
+} from './backfill/index.js';
