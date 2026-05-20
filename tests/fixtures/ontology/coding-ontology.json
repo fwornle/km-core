@@ -1,0 +1,82 @@
+{
+  "meta": {
+    "name": "coding",
+    "version": "1.0.0",
+    "extends": "upper",
+    "description": "Synthetic coding-domain lower ontology — proxy for B's component-manifest.yaml (7 L1 + 5 L2 derived from on-disk source). Phase 42 owns the real YAML→JSON conversion; this fixture exists purely so Phase 38 SC#3 can verify load + extends-merge works against B-shape data without forcing the YAML adapter. Note: 38-CONTEXT.md / 38-PATTERNS.md cite '8 L1 + 5 L2' — that figure drifts from the on-disk component-manifest.yaml count of 7 L1; this fixture uses the on-disk source of truth."
+  },
+  "classes": {
+    "LiveLoggingSystem": {
+      "extends": "Component",
+      "defaultLayer": "evidence",
+      "description": "L1 component from B's manifest (synthetic proxy).",
+      "relationships": {}
+    },
+    "LLMAbstraction": {
+      "extends": "Component",
+      "defaultLayer": "evidence",
+      "description": "L1 component from B's manifest (synthetic proxy).",
+      "relationships": {}
+    },
+    "DockerizedServices": {
+      "extends": "Component",
+      "defaultLayer": "evidence",
+      "description": "L1 component from B's manifest (synthetic proxy).",
+      "relationships": {}
+    },
+    "KnowledgeManagement": {
+      "extends": "Component",
+      "defaultLayer": "evidence",
+      "description": "L1 component from B's manifest (synthetic proxy).",
+      "relationships": {}
+    },
+    "CodingPatterns": {
+      "extends": "Component",
+      "defaultLayer": "evidence",
+      "description": "L1 component from B's manifest (synthetic proxy).",
+      "relationships": {}
+    },
+    "ConstraintSystem": {
+      "extends": "Component",
+      "defaultLayer": "evidence",
+      "description": "L1 component from B's manifest (synthetic proxy).",
+      "relationships": {}
+    },
+    "SemanticAnalysis": {
+      "extends": "Component",
+      "defaultLayer": "evidence",
+      "description": "L1 component from B's manifest (synthetic proxy).",
+      "relationships": {}
+    },
+    "ManualLearning": {
+      "extends": "KnowledgeManagement",
+      "defaultLayer": "evidence",
+      "description": "L2 sub-component of KnowledgeManagement (synthetic proxy).",
+      "relationships": {}
+    },
+    "OnlineLearning": {
+      "extends": "KnowledgeManagement",
+      "defaultLayer": "evidence",
+      "description": "L2 sub-component of KnowledgeManagement (synthetic proxy).",
+      "relationships": {}
+    },
+    "Pipeline": {
+      "extends": "SemanticAnalysis",
+      "defaultLayer": "evidence",
+      "description": "L2 sub-component of SemanticAnalysis (synthetic proxy).",
+      "relationships": {}
+    },
+    "Ontology": {
+      "extends": "SemanticAnalysis",
+      "defaultLayer": "evidence",
+      "description": "L2 sub-component of SemanticAnalysis (synthetic proxy).",
+      "relationships": {}
+    },
+    "Insights": {
+      "extends": "SemanticAnalysis",
+      "defaultLayer": "evidence",
+      "description": "L2 sub-component of SemanticAnalysis (synthetic proxy).",
+      "relationships": {}
+    }
+  }
+}
