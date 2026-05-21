@@ -425,9 +425,18 @@ export class GraphKMStore extends EventEmitter {
         // internal putEntity call passes { skipOntologyCheck: true } per Plan
         // 01, so neither write re-enters this branch (trusted path skips the
         // entire `!trusted` block including this supersession-closure).
+        //
+        // Phase 39 CR-01 fix: both ops carry per-op `skipOntologyCheck: true`
+        // so batch() Phase 1 bypasses `parseEntityId` for both `closedOld`
+        // (which may have a non-v7 legacy id — nanoid, layer-prefixed, or any
+        // id stored via the trusted path) AND `entity` (whose id is v7, but
+        // setting the flag uniformly keeps the supersession-closure write
+        // self-consistent). Without this, cross-epoch supersession (v7
+        // successor → legacy-id predecessor) silently throws in Phase 1
+        // and D-33 atomicity breaks. See REVIEW.md CR-01.
         await this.batch([
-          { type: 'putEntity', entity: closedOld },
-          { type: 'putEntity', entity },
+          { type: 'putEntity', entity: closedOld, skipOntologyCheck: true },
+          { type: 'putEntity', entity, skipOntologyCheck: true },
         ]);
         // Materialize SUPERSEDED_BY edge for D-35 reverse-walk index
         // (Pattern 2A.1 — single source of truth in Graphology, no
@@ -623,11 +632,19 @@ export class GraphKMStore extends EventEmitter {
     // Phase 1: validate ALL ops. Any throw bubbles BEFORE any mutation.
     for (const op of ops) {
       if (op.type === 'putEntity') {
-        // Ontology check (skipped by individual `skipOntologyCheck` flag
-        // is NOT supported in batch — batch is strict-by-default).
-        this.validator.validate(op.entity.entityType);
-        if (op.entity.id !== undefined && op.entity.id !== null) {
-          parseEntityId(op.entity.id as unknown as string);
+        // Per-op `skipOntologyCheck` (Phase 39 CR-01 fix): mirrors the BC-2
+        // widening that `PutEntityOpts.skipOntologyCheck` provides for the
+        // single-call `putEntity`. When `true`, bypasses BOTH ontology
+        // validation AND `parseEntityId` for this op. Required by the D-33
+        // supersession closure when the predecessor was stored on the
+        // trusted path with a non-v7 id (legacy nanoid, layer-prefixed,
+        // backfilled). Strict-by-default is preserved — callers MUST opt in.
+        const opTrusted = op.skipOntologyCheck === true;
+        if (!opTrusted) {
+          this.validator.validate(op.entity.entityType);
+          if (op.entity.id !== undefined && op.entity.id !== null) {
+            parseEntityId(op.entity.id as unknown as string);
+          }
         }
       } else if (op.type === 'deleteEntity') {
         parseEntityId(op.id as unknown as string);

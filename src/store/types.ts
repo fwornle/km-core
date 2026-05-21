@@ -13,9 +13,24 @@ import type { EntityId } from '../ids/branded.js';
  * Atomic, all-or-nothing batch operation (D-17). Plan 04 maps these to
  * LevelDB atomic batches and applies them to Graphology only after the
  * LevelDB commit succeeds.
+ *
+ * Per-op `skipOntologyCheck` (Phase 39 CR-01 widening): mirrors the same
+ * BC-2 escape hatch that `PutEntityOpts.skipOntologyCheck` provides for the
+ * single-call `putEntity`. When `true`, Phase 1 validation bypasses BOTH
+ * the ontology validator AND `parseEntityId` for this op's entity — required
+ * for cross-epoch supersession closures where the predecessor entity was
+ * originally stored on the trusted path with a non-v7 id (legacy nanoid,
+ * C's `layer:uuid` prefix, or any backfill-stamped legacy id). Without
+ * this flag, the supersession closure's batch would silently throw on
+ * Phase 1 `parseEntityId` for legacy-keyed predecessors, breaking D-33
+ * atomicity. See CR-01 in `.planning/phases/39-entity-data-model/39-REVIEW.md`.
  */
 export type BatchOp =
-  | { type: 'putEntity'; entity: Partial<Entity> & { name: string; entityType: string } }
+  | {
+      type: 'putEntity';
+      entity: Partial<Entity> & { name: string; entityType: string };
+      skipOntologyCheck?: boolean;
+    }
   | { type: 'deleteEntity'; id: EntityId }
   | { type: 'addRelation'; relation: Relation }
   | { type: 'removeRelation'; relation: Relation };

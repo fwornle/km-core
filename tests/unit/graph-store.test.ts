@@ -703,4 +703,61 @@ describe('Phase 39 — supersession + active-only filter (D-33/D-34/D-35)', () =
     expect(found[0]!.name).toBe('NoValidUntil');
     expect(found[0]!.validUntil).toBeUndefined();
   });
+
+  test('putEntity supersession closes a legacy-id predecessor atomically (CR-01 regression)', async () => {
+    // CR-01 regression guard: the supersession closure's batch() call must
+    // bypass parseEntityId for the predecessor when the predecessor was
+    // originally stored via the trusted path with a non-v7 id (legacy
+    // nanoid, layer-prefixed, etc.). Without the per-op skipOntologyCheck
+    // flag on the closedOld batch op, Phase 1 validation throws and D-33
+    // atomicity breaks for the cross-epoch case.
+    //
+    // Seed a legacy-id predecessor via the trusted path (nanoid-style id,
+    // pre-stamped metadata.provenance + validFrom so the supersession
+    // closure has a valid `entity.validFrom!` source to close against).
+    const legacyOldId = 'legacy-nanoid-abc-def' as EntityId;
+    const legacyProv: EntityProvenance = {
+      createdBy: mkProvenance('legacy'),
+      lastConfirmedBy: mkProvenance('legacy'),
+      confirmationCount: 1,
+    };
+    await ctx.store.putEntity(
+      {
+        id: legacyOldId,
+        name: 'LegacyOld',
+        entityType: 'Component',
+        layer: 'evidence',
+        description: '',
+        createdAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        validFrom: '2025-01-01T00:00:00.000Z',
+        metadata: { provenance: legacyProv },
+      },
+      { skipOntologyCheck: true },
+    );
+    // Now supersede the legacy entity with a fresh v7-id entity via the
+    // STRICT path — this triggers the D-33 closure, which is what CR-01
+    // broke. The closure's batch() must succeed end-to-end.
+    const newId = await ctx.store.putEntity(
+      {
+        name: 'NewV7',
+        entityType: 'Component',
+        supersedes: legacyOldId,
+      },
+      { provenance: mkProvenance('NewV7') },
+    );
+    // Assert both writes landed atomically:
+    //   (1) predecessor's validUntil = new entity's validFrom.
+    const oldAfter = await ctx.store.getEntity(legacyOldId);
+    const newAfter = await ctx.store.getEntity(newId);
+    expect(oldAfter).toBeDefined();
+    expect(newAfter).toBeDefined();
+    expect(oldAfter!.validUntil).toBeDefined();
+    expect(oldAfter!.validUntil).toBe(newAfter!.validFrom);
+    //   (2) SUPERSEDED_BY edge materialized for D-35 reverse-walk.
+    const rels = await ctx.store.findRelations({ type: 'SUPERSEDED_BY' });
+    expect(rels.length).toBe(1);
+    expect(rels[0]!.from).toBe(legacyOldId);
+    expect(rels[0]!.to).toBe(newId);
+  });
 });
