@@ -69,40 +69,41 @@ describe('JaccardNameMatcher', () => {
 
   test('threshold default 0.85 — confidence 0.84 returns matched: false', async () => {
     const matcher = new JaccardNameMatcher();
-    // 5 shared words + 1 unique word each side → intersection=5, union=6 → 5/6 ≈ 0.833 (< 0.85)
+    // 11 shared words + 1 unique word each side → intersection=11, union=13 → 11/13 ≈ 0.846 (< 0.85).
+    // Just barely below the default threshold — exercises the boundary.
     const entity = mkEntity({
       id: '0192a000-0000-7000-8000-000000000001' as EntityId,
-      name: 'one two three four five six',
+      name: 'a b c d e f g h i j k l',
     });
     const candidate = mkEntity({
       id: '0192a000-0000-7000-8000-000000000002' as EntityId,
-      name: 'one two three four five seven',
+      name: 'a b c d e f g h i j k m',
     });
     const result = await matcher.match(entity, [candidate]);
     expect(result.matched).toBe(false);
     expect(result.confidence).toBe(0);
-    // Sanity: the raw Jaccard for the candidate pair would be < 0.85
-    // (5/6 ≈ 0.833). Confirmed by the matched: false result above —
-    // the matcher only returns a non-zero confidence when a candidate
-    // exceeds threshold.
+    // The matcher returns confidence: 0 on the no-match path even though
+    // the raw Jaccard score (~0.846) is non-zero — by D-44 the
+    // below-threshold confidence is informational only and 0 signals "no
+    // layer match" to LayeredDeduplicator.
   });
 
   test('threshold opt overrides default', async () => {
     const matcher = new JaccardNameMatcher({ threshold: 0.5 });
-    // Same name pair as the 0.85 boundary test — Jaccard ≈ 0.833,
+    // Same name pair as the 0.85 boundary test — Jaccard 11/13 ≈ 0.846,
     // which now exceeds the lowered 0.5 threshold.
     const entity = mkEntity({
       id: '0192a000-0000-7000-8000-000000000001' as EntityId,
-      name: 'one two three four five six',
+      name: 'a b c d e f g h i j k l',
     });
     const candidate = mkEntity({
       id: '0192a000-0000-7000-8000-000000000002' as EntityId,
-      name: 'one two three four five seven',
+      name: 'a b c d e f g h i j k m',
     });
     const result = await matcher.match(entity, [candidate]);
     expect(result.matched).toBe(true);
     expect(result.survivor?.id).toBe(candidate.id);
-    expect(result.confidence).toBeCloseTo(5 / 6, 5);
+    expect(result.confidence).toBeCloseTo(11 / 13, 5);
     expect(matcher.threshold).toBe(0.5);
   });
 
