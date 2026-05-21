@@ -66,20 +66,41 @@ export async function writeCheckpointAtomic(
 
 /**
  * Returns `null` if the file does not exist (fresh run); throws on any
- * other I/O error (permission denied, malformed JSON, etc.).
+ * other I/O error (permission denied, malformed JSON, etc.) AND on a
+ * version mismatch (WR-03 guard — see below).
  *
  * Callers MUST treat a `null` return as "no prior state — start from
  * the beginning"; treating it as an error would break the first-run
  * path (no checkpoint yet exists).
+ *
+ * WR-03 (Phase 39 REVIEW): after parsing, the `version` field is
+ * checked against the current schema marker (`1`). On mismatch, the
+ * function throws with an actionable error including the path so the
+ * operator can delete it to start fresh. Without this, a checkpoint
+ * persisted under a future schema version would be silently accepted
+ * and produce wrong resume state (e.g. missing fields read as
+ * `undefined`, downstream `String(undefined)` cursor comparisons
+ * never matching, infinite re-scan loops, etc.).
  */
 export async function readCheckpoint(
   checkpointPath: string,
 ): Promise<Checkpoint | null> {
+  let raw: string;
   try {
-    const raw = await fs.promises.readFile(checkpointPath, 'utf-8');
-    return JSON.parse(raw) as Checkpoint;
+    raw = await fs.promises.readFile(checkpointPath, 'utf-8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err; // surface real I/O errors
   }
+  const cp = JSON.parse(raw) as Checkpoint;
+  // WR-03 version guard: bump the expected literal when Checkpoint shape
+  // evolves. Throws on mismatch to prevent silent corruption of resume
+  // state when a future schema version's checkpoint is read by an older
+  // library or vice versa.
+  if (cp.version !== 1) {
+    throw new Error(
+      `backfill checkpoint version mismatch: expected 1, got ${String(cp.version)}. Delete ${checkpointPath} to start fresh.`,
+    );
+  }
+  return cp;
 }
