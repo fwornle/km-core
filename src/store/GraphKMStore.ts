@@ -429,6 +429,25 @@ export class GraphKMStore extends EventEmitter {
             `Supersession target ${String(oldId)} not in graph`,
           );
         }
+        // WR-02 write-time enforcement: a single predecessor entity may
+        // have AT MOST ONE successor. Two rapid concurrent (or buggy)
+        // putEntity calls with `supersedes: sameOldId` could otherwise
+        // each write a SUPERSEDED_BY edge from `oldId`, violating the
+        // single-successor contract and making `getSupersessionChain`
+        // forward walk non-deterministic. Surface the violation here
+        // before it becomes a silent data-integrity issue. See WR-02 in
+        // `.planning/phases/39-entity-data-model/39-REVIEW.md`.
+        let existingSuccessors = 0;
+        this.graph.forEachOutEdge(oldId, (_key, attrs) => {
+          if ((attrs as Relation).type === 'SUPERSEDED_BY') {
+            existingSuccessors += 1;
+          }
+        });
+        if (existingSuccessors > 0) {
+          throw new Error(
+            `Entity ${String(oldId)} already has a successor — cannot supersede twice (WR-02 single-successor invariant)`,
+          );
+        }
         if (oldEntity.validUntil !== undefined) {
           process.stderr.write(
             `[km-core/store] overwriting validUntil for ${String(oldId)} (was ${oldEntity.validUntil})\n`,
@@ -631,14 +650,31 @@ export class GraphKMStore extends EventEmitter {
     // Phase 2: walk forward via SUPERSEDED_BY out-edges from the input
     // id. `before[]` already includes the input id; `after[]` collects
     // its successors only.
+    //
+    // WR-02 fix: pick the FIRST unvisited SUPERSEDED_BY successor and
+    // warn on any additional matches. Previously the walk used the LAST
+    // match (later assignments overwrote earlier candidates), making the
+    // traversal non-deterministic when a node had multiple successor
+    // edges (a data-integrity violation that the new write-time check
+    // above now prevents for fresh writes, but pre-existing forked data
+    // could still reach this code path). Defense-in-depth: surface the
+    // anomaly via stderr-warn rather than silently picking inconsistent
+    // edges. See WR-02 in `.planning/phases/39-entity-data-model/39-REVIEW.md`.
     const after: Entity[] = [];
     cursor = id;
     while (cursor !== undefined) {
       let next: EntityId | undefined;
+      const cursorForWarn: EntityId = cursor;
       this.graph.forEachOutEdge(cursor, (_key, attrs, _src, tgt) => {
         const r = attrs as Relation;
         if (r.type === 'SUPERSEDED_BY' && !visited.has(tgt as EntityId)) {
-          next = tgt as EntityId;
+          if (next === undefined) {
+            next = tgt as EntityId;
+          } else {
+            process.stderr.write(
+              `[km-core/store] multiple SUPERSEDED_BY successors at ${String(cursorForWarn)}; picking first (${String(next)}), ignoring ${String(tgt)}\n`,
+            );
+          }
         }
       });
       if (next === undefined) break;
