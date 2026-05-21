@@ -351,10 +351,22 @@ describe('backfillEntityDataModel (D-36, D-37, D-38)', () => {
       });
 
       // res-1 hit by the cursor-skip; res-2 + res-3 stamped.
-      // Stamped includes the prior checkpoint's 1 + 2 fresh = 3.
+      // Stamped includes the prior checkpoint's 1 + 2 fresh = 3 (stamped
+      // is cumulative across resumed runs per the BackfillResult contract).
       expect(result.stamped).toBe(3);
       // Resolver invoked only for res-2 + res-3 (NOT for res-1).
       expect(resolverSpy).toHaveBeenCalledTimes(2);
+
+      // CR-02 fix: `skipped` is a PER-RUN counter (not cumulative).
+      // This run skipped exactly ONE entity (res-1 hit by cursor); the
+      // prior checkpoint's `skipped: 0` is NOT carried forward into the
+      // result. Before the CR-02 fix, the result reported `skipped: 1`
+      // by coincidence here (prior.skipped was 0, so the double-count
+      // didn't surface) — but with a non-zero prior.skipped, the bug
+      // would over-report. Asserting the per-run value locks down the
+      // intended semantics.
+      expect(result.skipped).toBe(1);
+      expect(result.scanned).toBe(3);
 
       const e2 = await ctx.store.getEntity('res-2' as EntityId);
       const e3 = await ctx.store.getEntity('res-3' as EntityId);

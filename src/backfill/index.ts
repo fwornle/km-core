@@ -94,16 +94,22 @@ export interface BackfillOptions {
 /**
  * Result of a backfill run.
  *
- *   - `scanned`: total entities seen in iteration (including ones
- *     skipped because they already had `validFrom` or were already past
- *     the checkpoint cursor on resume).
- *   - `stamped`: entities for which `store.putEntity` was called. In
- *     `dryRun:true` mode this is always 0 — dry-run reports intent only.
- *   - `skipped`: `scanned - stamped` on a non-dry-run; on a dry-run
- *     `skipped` counts entities that already had `validFrom` (dry-run
- *     does NOT count would-stamp entities as skipped — they are simply
- *     "would-stamp", and the dry-run summary surfaces that as
- *     `scanned - skipped` per per-test behavior contract).
+ *   - `scanned`: per-run total entities seen in iteration (including
+ *     ones skipped because they already had `validFrom` or were already
+ *     past the checkpoint cursor on resume). Always a fresh count for
+ *     this invocation (not cumulative across resumed runs).
+ *   - `stamped`: cumulative count of entities for which `store.putEntity`
+ *     was called — carries forward from the prior checkpoint so a
+ *     100K-entity backfill interrupted 3 times still reports
+ *     `stamped: 100000` at the end. In `dryRun:true` mode this is always
+ *     0 — dry-run reports intent only.
+ *   - `skipped`: per-run count of entities that were not stamped because
+ *     they already had `validFrom` (D-37 idempotency skip) or were
+ *     skipped by the resume cursor. Always a fresh count for this
+ *     invocation (not cumulative across resumed runs) — fixes CR-02
+ *     double-counting on resume. On a dry-run, `skipped` counts only
+ *     entities that already had `validFrom`; dry-run does NOT count
+ *     would-stamp entities as skipped.
  */
 export interface BackfillResult {
   scanned: number;
@@ -158,7 +164,15 @@ export async function backfillEntityDataModel(
   const prior = await readCheckpoint(checkpointPath);
   let lastStampedId: string | null = prior?.lastStampedId ?? null;
   let stamped = prior?.stamped ?? 0;
-  let skipped = prior?.skipped ?? 0;
+  // CR-02 fix: `skipped` is a PER-RUN counter — it does NOT carry forward
+  // from the prior checkpoint. The previous behavior (`prior?.skipped ?? 0`)
+  // double-counted entities skipped on the original run AND skipped again
+  // by the resume cursor on the subsequent run, over-reporting the true
+  // count for any resumed invocation. Only `stamped` carries forward
+  // (cumulative across resumed runs per BackfillResult JSDoc — "a 100K
+  // entity backfill interrupted 3 times still reports stamped: 100000").
+  // See REVIEW.md CR-02 and IN-02 in `.planning/phases/39-entity-data-model/39-REVIEW.md`.
+  let skipped = 0;
   let scanned = 0;
   // When `lastStampedId` is null we're at the start (no prior progress)
   // or we just finished resume-skipping. The `sawCheckpointCursor` flag
