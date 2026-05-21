@@ -208,6 +208,48 @@ describe('mergeDescriptionSegment (D-39, D-40, D-41)', () => {
     expect(calls.some((s) => /has 51 confirmations \(>50/.test(s))).toBe(true);
   });
 
+  test('drops caller-supplied confirmations[] on D-40 miss (WR-04 provenance injection mitigation)', () => {
+    // WR-04 regression guard: on a D-40 miss (no normalized-text match),
+    // the helper MUST start the pushed segment with an empty
+    // confirmations[] regardless of what the caller passed. Previously
+    // it preserved caller-supplied confirmations[] verbatim, which let
+    // a caller (e.g. one constructing newSegment from external JSON)
+    // inject fabricated provenance entries without going through the
+    // normal confirmation-append path.
+    const entity = mkEntity({
+      metadata: {
+        descriptionSegments: [mkSegment('existing text')],
+      },
+    });
+    // Caller pre-populates confirmations[] with a structurally-invalid /
+    // suspicious entry. The fix must DROP this on the miss branch.
+    const injectedConfirmations = [
+      {
+        runId: 'attacker-controlled-run-id',
+        provider: 'fake-provider',
+        model: 'fake-model',
+        timestamp: '1970-01-01T00:00:00.000Z',
+      },
+    ];
+    const result = mergeDescriptionSegment(
+      entity,
+      mkSegment('completely different text', {
+        runId: 'r-legit',
+        confirmations: injectedConfirmations,
+      }),
+    );
+
+    const segments = result.metadata.descriptionSegments as DescriptionSegment[];
+    expect(segments.length).toBe(2);
+    // The new (no-match) segment must have a FRESH empty confirmations[] —
+    // the caller-supplied injectedConfirmations is dropped.
+    expect(segments[1].text).toBe('completely different text');
+    expect(segments[1].confirmations).toEqual([]);
+    // The pre-existing segment is unaffected.
+    expect(segments[0].text).toBe('existing text');
+    expect(segments[0].confirmations).toEqual([]);
+  });
+
   test('is a pure function — input entity reference is NOT mutated (D-39)', () => {
     const entity = mkEntity({
       metadata: {

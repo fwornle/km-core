@@ -71,11 +71,27 @@ function normalize(text: string): string {
  *     (extracted from `newSegment`) to that segment's `confirmations[]`.
  *   - Do NOT push a new segment.
  * Otherwise (D-40 miss):
- *   - Push `newSegment` (preserving caller-supplied `confirmations[]`; if
- *     the caller omitted it / passed `undefined`, initialize to `[]`).
+ *   - Push `newSegment` with a FRESH empty `confirmations[]` regardless of
+ *     what the caller passed in `newSegment.confirmations` (WR-04 provenance
+ *     injection mitigation — see WR-04 note at the bottom of this JSDoc).
  *
  * Entity with `metadata: {}` (Phase 37/38 default — no `descriptionSegments`
  * key) is handled — the helper initializes the array on the returned entity.
+ *
+ * WR-04 (Phase 39 REVIEW): On the D-40 miss branch, the helper previously
+ * preserved any `confirmations[]` array supplied by the caller verbatim,
+ * which created a provenance injection vector — a caller (especially one
+ * constructing `newSegment` from a deserialized external payload) could
+ * pre-populate `confirmations` with arbitrary structurally-invalid entries
+ * (missing runId, wrong timestamp format, fabricated provider/model) that
+ * would land in the entity's confirmation history without going through
+ * the normal confirmation-append path. The fix is to ALWAYS start a new
+ * segment with `confirmations: []` on a miss; the implicit confirmation
+ * for the ingest-time call itself is captured by the next merge with
+ * matching text (the D-40 hit branch). Restore-from-backup or migration
+ * flows that legitimately need to carry forward pre-existing confirmations
+ * MUST use a separate restore API, not this ingest-time helper. See
+ * `.planning/phases/39-entity-data-model/39-REVIEW.md` WR-04.
  *
  * D-41 monitoring: emits `process.stderr.write` warning (no `console.*`)
  * when the resulting segments array exceeds `MAX_SEGMENTS_WARN` (100), or
@@ -120,11 +136,15 @@ export function mergeDescriptionSegment(
       );
     }
   } else {
-    // D-40 miss: push the new segment (preserve caller-supplied
-    // confirmations[] per "Gotcha — empty confirmations[]" in PATTERNS.md).
+    // D-40 miss: push the new segment with a FRESH empty confirmations[]
+    // regardless of caller input (WR-04 provenance injection mitigation —
+    // see JSDoc above). Previously this preserved caller-supplied
+    // confirmations[] verbatim, creating an injection vector. Migration
+    // / restore flows that legitimately need to carry forward pre-existing
+    // confirmations MUST use a separate restore API.
     segments.push({
       ...newSegment,
-      confirmations: newSegment.confirmations ?? [],
+      confirmations: [],
     });
     if (segments.length > MAX_SEGMENTS_WARN) {
       process.stderr.write(
