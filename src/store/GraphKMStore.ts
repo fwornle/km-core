@@ -303,6 +303,24 @@ export class GraphKMStore extends EventEmitter {
    * verbatim — the strict-path stamping intentionally does NOT run.
    *
    * Emits `entity:put` and schedules a debounced export.
+   *
+   * WR-01 footgun (Phase 39 REVIEW): the `supersedes` field is the AUTHOR's
+   * declaration of intent, NOT a store-maintained invariant. After the D-33
+   * supersession closure fires, the new entity is stored with `supersedes`
+   * still set on its node attributes — `getEntity()` will return it. This
+   * is REQUIRED for `getSupersessionChain` to walk backward from the new
+   * entity to its predecessors (D-35 uses `entity.supersedes` as the
+   * authoritative backward-traversal pointer; the SUPERSEDED_BY edge is
+   * only the forward index).
+   *
+   * Downstream callers (Phase 40/42/43) that perform read-modify-write
+   * patterns on entities MUST be aware: a subsequent strict-path `putEntity`
+   * on an existing id with `supersedes` still set is a SILENT NO-OP on the
+   * supersession branch (the OQ#4 `!existing` guard saves them — closure +
+   * reverse-edge fire ONLY on the create branch; the confirm-write still
+   * bumps `lastConfirmedBy` / `confirmationCount`). To explicitly re-attempt
+   * supersession on an existing id, delete and recreate the entity.
+   * See WR-01 in `.planning/phases/39-entity-data-model/39-REVIEW.md`.
    */
   async putEntity(
     e: Partial<Entity> & { name: string; entityType: string },
@@ -462,6 +480,17 @@ export class GraphKMStore extends EventEmitter {
    * Retrieve an entity by id. Returns `undefined` if the node is
    * absent — matches the test contract
    * (`expect(await ctx.store.getEntity(id)).toBeUndefined()`).
+   *
+   * WR-01 footgun reminder (Phase 39 REVIEW): the returned entity may
+   * carry `supersedes` as a stored attribute when it superseded a
+   * predecessor at create time. This field is the AUTHOR's declaration
+   * (the authoritative backward-traversal pointer for
+   * `getSupersessionChain`), NOT a store-maintained invariant. Callers
+   * doing read-modify-write should NOT pass the field back through
+   * `putEntity` unless they explicitly want to re-attempt supersession —
+   * and even then the OQ#4 `!existing` guard makes it a no-op on the
+   * supersession branch (closure fires only on the create branch). See
+   * `putEntity` JSDoc for the full footgun discussion.
    */
   async getEntity(id: EntityId): Promise<Entity | undefined> {
     if (!this.graph.hasNode(id)) return undefined;
