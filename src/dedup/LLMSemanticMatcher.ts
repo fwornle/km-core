@@ -128,9 +128,12 @@ export class LLMSemanticMatcher implements LLMSemanticLayer {
     }
     // Pitfall 1 defense: prefer ontologyClass; fall back to entityType.
     const ontologyClass = entity.ontologyClass ?? entity.entityType;
-    const existingNames = candidates
-      .filter((c) => c.id !== entity.id)
-      .map((c) => c.name);
+    // CR-02 fix (40-REVIEW.md): no self-id filter. By D-46 (active-only
+    // candidate pool), an exact id collision means the same logical
+    // entity — which IS what dedup is meant to catch (legacy-id
+    // re-extraction). Self-write protection is the store's job, not
+    // the matcher's. See 40-REVIEW.md CR-02 + 40-VERIFICATION.md gap #2.
+    const existingNames = candidates.map((c) => c.name);
     if (existingNames.length === 0) {
       return { matched: false, confidence: 0 };
     }

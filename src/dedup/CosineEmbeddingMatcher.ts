@@ -89,9 +89,10 @@ export interface CosineEmbeddingMatcherOpts {
  * caller-supplied `EmbeddingClient`, returns the best above-threshold
  * candidate.
  *
- * Self-match guard: skips `candidates[i]` where `id === entity.id` per
- * 40-RESEARCH Example 3 line 414. This is the same guard B uses in its
- * Jaccard layer (Plan 40-02) and OKM uses in its LLM layer.
+ * Per CR-02 (40-REVIEW.md), no self-id guard — exact id collision IS the
+ * same logical entity (legacy-id re-extraction path) and IS the match
+ * dedup must catch. Self-write protection is the store's job, not the
+ * matcher's.
  *
  * D-46: caller (the pipeline, not this matcher) pre-filters `candidates`
  * to the same ontologyClass + active-only via
@@ -119,8 +120,12 @@ export class CosineEmbeddingMatcher implements EmbeddingLayer {
       ...candidates.map((c) => this.client.embed(this.textOf(c))),
     ]);
     let best: { candidate: Entity; score: number } | null = null;
+    // CR-02 fix (40-REVIEW.md): no self-id guard. By D-46 (active-only
+    // candidate pool), an exact id collision means the same logical
+    // entity — which IS what dedup is meant to catch (legacy-id
+    // re-extraction). Self-write protection is the store's job, not
+    // the matcher's. See 40-REVIEW.md CR-02 + 40-VERIFICATION.md gap #2.
     for (let i = 0; i < candidates.length; i++) {
-      if (candidates[i].id === entity.id) continue;
       const score = cosine(entityVec, candidateVecs[i]);
       if (score >= this.threshold && (!best || score > best.score)) {
         best = { candidate: candidates[i], score };

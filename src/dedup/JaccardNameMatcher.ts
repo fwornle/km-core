@@ -37,8 +37,10 @@ export interface JaccardNameMatcherOpts {
  * similarity over `entity.name` lowercased + whitespace-split.
  *
  * Pure transform: no `this` state beyond ctor opts, no I/O, no mutation
- * of `entity` or `candidates`. Identity guard via `candidate.id === entity.id`
- * prevents self-match against the entity's own row in the candidate pool.
+ * of `entity` or `candidates`. Per CR-02 (40-REVIEW.md), no self-id
+ * guard — exact id collision IS the same logical entity (legacy-id
+ * re-extraction path) and IS the match dedup must catch. Self-write
+ * protection is the store's job.
  */
 export class JaccardNameMatcher implements ExactNameLayer {
   readonly threshold: number;
@@ -49,8 +51,12 @@ export class JaccardNameMatcher implements ExactNameLayer {
 
   async match(entity: Entity, candidates: Entity[]): Promise<MatchResult> {
     let best: { candidate: Entity; score: number } | null = null;
+    // CR-02 fix (40-REVIEW.md): no self-id guard. By D-46 (active-only
+    // candidate pool), an exact id collision means the same logical
+    // entity — which IS what dedup is meant to catch (legacy-id
+    // re-extraction). Self-write protection is the store's job, not
+    // the matcher's. See 40-REVIEW.md CR-02 + 40-VERIFICATION.md gap #2.
     for (const candidate of candidates) {
-      if (candidate.id === entity.id) continue; // never match self
       const score = jaccard(entity.name, candidate.name);
       if (score >= this.threshold && (!best || score > best.score)) {
         best = { candidate, score };
