@@ -47,6 +47,34 @@ import type { Entity } from '../types/entity.js';
 import type { LLMSemanticLayer, MatchResult } from './types.js';
 
 /**
+ * Typed error thrown by {@link LLMSemanticMatcher.match} in
+ * `onError: 'throw'` mode when the LLM response cannot be parsed
+ * even after the 5-stage candidate-list unwrap. Closes CR-03
+ * (40-REVIEW.md) — callers can `instanceof`-discriminate parse
+ * failures from network errors / timeouts / other LLM-client errors.
+ *
+ * - `raw` — the first 1000 chars of the LLM's original response
+ *   (truncated to avoid huge / PII payloads in error chains).
+ * - `cause` — the underlying SyntaxError (Node 16+ Error cause).
+ *
+ * Contract A (40-10-PLAN.md): this error is constructed ONLY when the
+ * raw LLM response contains at least one `{` (i.e. the LLM attempted
+ * JSON). Prose-only responses with no `{` are silent no-match — no
+ * throw, no stderr.
+ */
+export class LLMDedupParseError extends Error {
+  readonly raw: string;
+  constructor(message: string, opts: { raw: string; cause?: unknown }) {
+    super(
+      message,
+      opts.cause !== undefined ? { cause: opts.cause } : undefined,
+    );
+    this.name = 'LLMDedupParseError';
+    this.raw = opts.raw.slice(0, 1000);
+  }
+}
+
+/**
  * Caller-supplied LLM client. Phase 43 wires OKM's `@rapid/llm-proxy`;
  * Phases 41 + 42 wire their respective providers (groq, haiku, ...).
  *
@@ -151,7 +179,26 @@ export class LLMSemanticMatcher implements LLMSemanticLayer {
         responseFormat: { type: 'json_object' },
         timeout: this.timeoutMs,
       });
-      const parsed = parseDedupResponse(response.content);
+      const parseResult = parseDedupResponse(response.content);
+
+      // CR-03 + Contract A (40-10-PLAN.md): distinguish "LLM attempted
+      // JSON but it failed to parse" from "LLM responded with prose-only
+      // refusal / no-match". Heuristic: if response.content contains at
+      // least one `{`, the LLM tried to send JSON. If ALL candidate
+      // unwrap stages failed to JSON.parse (`parseResult.ok === false`),
+      // surface a typed LLMDedupParseError. If response.content has NO
+      // `{`, fall through to the normal no-match path (silent — no
+      // throw, no stderr-warn). If parse SUCCEEDED but matches is empty,
+      // that's a genuine canonical no-match — also silent.
+      const parsedTriedJson = response.content.includes('{');
+      if (parsedTriedJson && !parseResult.ok) {
+        throw new LLMDedupParseError(
+          'LLMSemanticMatcher: failed to parse LLM response',
+          { raw: response.content, cause: parseResult.error },
+        );
+      }
+      const parsed = parseResult.ok ? parseResult.value : { matches: [] };
+
       const match = parsed.matches?.find((m) => m.newName === entity.name);
       if (!match) {
         return { matched: false, confidence: 0 };
@@ -162,11 +209,22 @@ export class LLMSemanticMatcher implements LLMSemanticLayer {
         : { matched: false, confidence: 0 };
     } catch (err) {
       if (this.onError === 'throw') throw err;
+      // onError: 'skip' — stderr-warn + no-match fallback.
+      const isParseErr = err instanceof LLMDedupParseError;
+      const prefix = isParseErr ? 'parse error' : 'match error';
+      const suffix = isParseErr
+        ? ' (raw response: ' +
+          (err as LLMDedupParseError).raw.slice(0, 200) +
+          ')'
+        : '';
       process.stderr.write(
-        '[km-core/dedup/llm] match error for "' +
+        '[km-core/dedup/llm] ' +
+          prefix +
+          ' for "' +
           entity.name +
           '" — skipping: ' +
           (err instanceof Error ? err.message : String(err)) +
+          suffix +
           '\n',
       );
       return { matched: false, confidence: 0 };
@@ -196,36 +254,74 @@ Existing entities: ${JSON.stringify(existingNames)}
 
 Identify semantic duplicates.`;
 
-// 5-stage JSON unwrap — verbatim port from OKM `deduplicator.ts:451-472`.
-// Stages: trim → anchored fence → unanchored fence → bare-brace extraction
-// → JSON.parse. Each stage is a guarded fallthrough; the first stage that
-// produces valid JSON-shaped text wins.
-function parseDedupResponse(
-  raw: string,
-): { matches?: Array<{ newName: string; existingName: string }> } {
-  let s = raw.trim();
-  // Anchored fence: entire payload is ```json\n...\n``` (possibly with
-  // surrounding whitespace).
-  const fenceMatch = s.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```\s*$/);
-  if (fenceMatch) {
-    s = fenceMatch[1].trim();
-  } else {
-    // Unanchored fence: fenced block lives somewhere in the response
-    // (e.g. "Sure, here is the JSON:\n```json\n{...}\n```\n...").
-    const unanchored = s.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
-    if (unanchored) {
-      s = unanchored[1].trim();
-    } else if (!s.startsWith('{') && !s.startsWith('[')) {
-      // Bare-brace extraction: prose-wrapped JSON. Slice from the first
-      // `{` to the last `}` and hope for the best.
-      const firstBrace = s.indexOf('{');
-      if (firstBrace >= 0) {
-        const lastBrace = s.lastIndexOf('}');
-        if (lastBrace > firstBrace) {
-          s = s.slice(firstBrace, lastBrace + 1);
-        }
-      }
+/**
+ * Discriminated parse result from `parseDedupResponse`. Lets `match()`
+ * tell "all candidate unwraps failed JSON.parse" (CR-03 typed-error
+ * path) from "candidates parsed cleanly but matches is empty" (genuine
+ * no-match — silent).
+ */
+type ParsedDedupShape = {
+  matches?: Array<{ newName: string; existingName: string }>;
+};
+type ParseDedupResult =
+  | { ok: true; value: ParsedDedupShape }
+  | { ok: false; error: unknown };
+
+// CR-03 + WR-08 fix (40-REVIEW.md offset 311-340 recipe). The unwrap
+// is now a candidate-list-of-tries: each stage CONTRIBUTES a candidate
+// string when it can; we then try JSON.parse on each candidate in
+// order. If ALL candidates fail, return `{ ok: false, error }` so
+// match() can surface a typed LLMDedupParseError (Contract A — see
+// 40-10-PLAN.md). The pre-rewrite first-stage-match-wins mutation chain
+// starved Stages 2/3/4 when an earlier stage matched but emitted
+// non-parseable text — that's the WR-08 defect this candidate-list
+// pattern closes.
+//
+// PRIOR ART (Plan 40-04): The 5-stage OKM unwrap covered 4 response
+// shapes — anchored fence, unanchored fence, bare-brace, raw JSON.
+// The rewrite preserves all 4 by adding them as separate candidates
+// (Stage 4 'raw' = the input as-given, which covers the raw-JSON
+// case). canonicalEmptyResponse is now obsolete: `parseResult.ok`
+// directly distinguishes the genuine canonical-empty answer (parse
+// succeeded → ok: true → match() does NOT throw) from the all-failed
+// case (ok: false → match() throws LLMDedupParseError when `{` was
+// present in the raw response).
+function parseDedupResponse(raw: string): ParseDedupResult {
+  const s = raw.trim();
+  const candidates: string[] = [];
+
+  // Stage 1: anchored fence (entire payload is ```json\n...\n```).
+  const anchored = s.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```\s*$/);
+  if (anchored) candidates.push(anchored[1].trim());
+
+  // Stage 2: unanchored fence (fenced block somewhere in the response,
+  // e.g. "Sure, here is the JSON:\n```json\n{...}\n```\n...").
+  const unanchored = s.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
+  if (unanchored) candidates.push(unanchored[1].trim());
+
+  // Stage 3: bare-brace extraction (prose-wrapped JSON).
+  if (!s.startsWith('{') && !s.startsWith('[')) {
+    const firstBrace = s.indexOf('{');
+    const lastBrace = s.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      candidates.push(s.slice(firstBrace, lastBrace + 1));
     }
   }
-  return JSON.parse(s);
+
+  // Stage 4: raw (covers the LLM-emits-pure-JSON case).
+  candidates.push(s);
+
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      return { ok: true, value: JSON.parse(candidate) as ParsedDedupShape };
+    } catch (err) {
+      lastError = err;
+      // try next candidate
+    }
+  }
+  // All candidates failed. match() surfaces a typed
+  // LLMDedupParseError when the raw response contained at least one `{`
+  // (Contract A — parsed-JSON-attempt path).
+  return { ok: false, error: lastError };
 }
