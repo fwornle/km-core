@@ -12,6 +12,14 @@
     "./ontology": {
       "types": "./dist/ontology/index.d.ts",
       "import": "./dist/ontology/index.js"
+    },
+    "./pipeline": {
+      "types": "./dist/pipeline/index.d.ts",
+      "import": "./dist/pipeline/index.js"
+    },
+    "./dedup": {
+      "types": "./dist/dedup/index.d.ts",
+      "import": "./dist/dedup/index.js"
     }
   },
   "files": [
