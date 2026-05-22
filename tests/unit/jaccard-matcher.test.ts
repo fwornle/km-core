@@ -107,16 +107,27 @@ describe('JaccardNameMatcher', () => {
     expect(matcher.threshold).toBe(0.5);
   });
 
-  test('never matches against entity.id === candidate.id (self-match)', async () => {
+  test('CR-02: legacy-id re-extraction — same-id candidate matches itself', async () => {
+    // CR-02 (40-REVIEW.md offset 83-109, VERIFICATION.md gap #2): the
+    // previous `if (candidate.id === entity.id) continue;` guard was dead
+    // code on the happy path (pipeline calls dedup BEFORE putEntity, so
+    // freshly-minted ids never collide) AND actively WRONG on the legacy-id
+    // re-extraction path — when an extractor re-emits a previously-stored
+    // entity at its same id, the guard skipped the perfect match and the
+    // pipeline silently wrote a duplicate. With the guard removed (Plan
+    // 40-09), an exact id collision IS the same logical entity, which IS
+    // what dedup is meant to catch. (Replaces the obsolete
+    // `'never matches against entity.id === candidate.id'` test that pinned
+    // the now-removed self-id guard.)
     const matcher = new JaccardNameMatcher();
     const sharedId = '0192a000-0000-7000-8000-000000000001' as EntityId;
-    const entity = mkEntity({ id: sharedId, name: 'PaymentService' });
-    // Same id, identical name — would score 1.0 if self-match were allowed.
-    const candidate = mkEntity({ id: sharedId, name: 'PaymentService' });
-    const result = await matcher.match(entity, [candidate]);
-    expect(result.matched).toBe(false);
-    expect(result.confidence).toBe(0);
-    expect(result.survivor).toBeUndefined();
+    const newEntity = mkEntity({ id: sharedId, name: 'UserAuthService' });
+    // Same id, identical name — legacy-id re-extraction case. Must score 1.0.
+    const candidate = mkEntity({ id: sharedId, name: 'UserAuthService' });
+    const result = await matcher.match(newEntity, [candidate]);
+    expect(result.matched).toBe(true);
+    expect(result.survivor?.id).toBe(sharedId);
+    expect(result.confidence).toBeCloseTo(1.0, 10);
   });
 
   test('picks best candidate when multiple exceed threshold', async () => {

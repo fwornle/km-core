@@ -99,21 +99,31 @@ describe('CosineEmbeddingMatcher', () => {
     expect(highResult.confidence).toBeCloseTo(0.91, 6);
   });
 
-  test('never matches entity.id === candidate.id (self)', async () => {
-    // Self-candidate has identical embedding (cosine 1.0), but id matches
-    // so it MUST be skipped. The only "valid" candidate has cosine 0.
+  test('CR-02: legacy-id re-extraction — same-id candidate matches itself', async () => {
+    // CR-02 (40-REVIEW.md offset 83-109, VERIFICATION.md gap #2): the
+    // previous `if (candidates[i].id === entity.id) continue;` guard was
+    // dead code on the happy path (pipeline calls dedup BEFORE putEntity,
+    // so freshly-minted ids never collide) AND actively WRONG on the
+    // legacy-id re-extraction path — when an extractor re-emits a
+    // previously-stored entity at its same id, the guard skipped the
+    // perfect match and the pipeline silently wrote a duplicate. With the
+    // guard removed (Plan 40-09), an exact id collision IS the same
+    // logical entity, which IS what dedup is meant to catch. (Replaces
+    // the obsolete `'never matches entity.id === candidate.id (self)'`
+    // test that pinned the now-removed self-id guard.)
     const embeddings = new Map<string, number[]>([
-      ['EntityA', [1, 0, 0]],
-      ['Other', [0, 1, 0]],
+      ['UserAuthService', [1, 0, 0]],
     ]);
     const client = makeFakeEmbeddingClient({ embeddings });
     const matcher = new CosineEmbeddingMatcher({ client });
-    const entity = mkEntity({ id: ID_ENTITY, name: 'EntityA' });
-    const self = mkEntity({ id: ID_ENTITY, name: 'EntityA' });
-    const other = mkEntity({ id: ID_C1, name: 'Other' });
-    const result = await matcher.match(entity, [self, other]);
-    expect(result.matched).toBe(false);
-    expect(result.survivor).toBeUndefined();
+    const sharedId = ID_ENTITY;
+    const newEntity = mkEntity({ id: sharedId, name: 'UserAuthService' });
+    // Same id, identical name → identical embedding → cosine 1.0.
+    const candidate = mkEntity({ id: sharedId, name: 'UserAuthService' });
+    const result = await matcher.match(newEntity, [candidate]);
+    expect(result.matched).toBe(true);
+    expect(result.survivor?.id).toBe(sharedId);
+    expect(result.confidence).toBeCloseTo(1.0, 6);
   });
 
   test('picks best candidate when multiple exceed threshold', async () => {

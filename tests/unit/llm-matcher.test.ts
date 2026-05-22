@@ -230,4 +230,53 @@ describe('LLMSemanticMatcher', () => {
     expect(req.responseFormat).toEqual({ type: 'json_object' });
     expect(req.timeout).toBe(60_000);
   });
+
+  test('CR-02: legacy-id re-extraction — same-id candidate is in existingNames + matches', async () => {
+    // CR-02 (40-REVIEW.md offset 83-109, VERIFICATION.md gap #2): the
+    // previous `.filter((c) => c.id !== entity.id)` clause inside the
+    // `existingNames` construction was dead code on the happy path AND
+    // actively WRONG on the legacy-id re-extraction path — when an
+    // extractor re-emits a previously-stored entity at its same id, the
+    // filter stripped the perfect candidate from the LLM prompt and the
+    // pipeline silently wrote a duplicate. With the filter removed (Plan
+    // 40-09), an exact id collision IS the same logical entity, the
+    // candidate name IS sent to the LLM, and the matched survivor IS
+    // returned (verified here via mock-LLM self-match + prompt inspection).
+    const sharedId = '0192a000-0000-7000-8000-000000000001' as unknown as ReturnType<
+      typeof mkEntity
+    >['id'];
+    const client = makeMockLLMClient({
+      matches: [{ newName: 'UserAuthService', existingName: 'UserAuthService' }],
+    });
+    const matcher = new LLMSemanticMatcher({ client });
+    const newEntity = mkEntity({
+      id: sharedId,
+      name: 'UserAuthService',
+      ontologyClass: 'Service',
+    });
+    // Same id, identical name — legacy-id re-extraction case.
+    const candidate = mkEntity({
+      id: sharedId,
+      name: 'UserAuthService',
+      ontologyClass: 'Service',
+    });
+
+    const result = await matcher.match(newEntity, [candidate]);
+
+    expect(result.matched).toBe(true);
+    expect(result.survivor?.id).toBe(sharedId);
+    expect(result.confidence).toBe(0.7);
+
+    // Prove the self-id filter is GONE — the candidate name MUST appear in
+    // the existingNames JSON inside the user-prompt message. Was previously
+    // stripped by the `.filter((c) => c.id !== entity.id)` clause.
+    const completeMock = client.complete as unknown as ReturnType<typeof vi.fn>;
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    const userContent = completeMock.mock.calls[0][0].messages[1].content as string;
+    expect(userContent).toContain(JSON.stringify(['UserAuthService']));
+    // (newNames and existingNames both contain 'UserAuthService' — the
+    // payload contains the literal twice; this assertion proves the
+    // existingNames side is no longer filtered.)
+    expect(userContent.match(/UserAuthService/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
 });
