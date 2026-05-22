@@ -24,12 +24,12 @@
 // is an ontologyClass-scoped, active-only-by-default pool sourced by the
 // pipeline before each dedup call. Layer impls do NOT re-filter.
 //
-// Plan 40-07 (root barrel) will add the `EmbeddingClient` + `LLMClient`
-// type re-exports here once Plans 40-03 + 40-04 land their matcher files:
-//   export type { EmbeddingClient } from './CosineEmbeddingMatcher.js';
-//   export type { LLMClient } from './LLMSemanticMatcher.js';
-// (Co-located with their matchers per 40-PATTERNS offset 511-516 and
-// Warning #4 fix in this plan's <objective>.)
+// Client interfaces (`EmbeddingClient`, `LLMClient`) are co-located with
+// their matcher impls (Plans 40-03 + 40-04) per 40-PATTERNS offset 511-516
+// and Warning #4 — the interface lives in the same file as the class that
+// types it. The type-only re-exports below give consumers reaching the
+// dedup sub-barrel (`@fwornle/km-core/dedup`) a complete type surface
+// without having to import deeply into individual matcher modules.
 
 import type { Entity } from '../types/entity.js';
 
@@ -132,4 +132,9 @@ export interface DedupResult {
   }>;
 }
 
-// Phase 40 Plan 07 will add re-exports: export type { EmbeddingClient } from './CosineEmbeddingMatcher.js'; etc.
+// Phase 40 Plan 07 — type-only re-exports for the dedup sub-barrel surface.
+// Co-located with matchers per 40-PATTERNS offset 511-516; the runtime
+// classes stay in their own files. Consumers reach these via either
+// `@fwornle/km-core/dedup` (sub-path) or `@fwornle/km-core` (root barrel).
+export type { EmbeddingClient } from './CosineEmbeddingMatcher.js';
+export type { LLMClient } from './LLMSemanticMatcher.js';
