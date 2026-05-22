@@ -196,6 +196,21 @@ export class IngestPipeline {
       const t0 = Date.now();
       for (const entity of entities) {
         const ontologyClass = entity.ontologyClass ?? entity.entityType;
+        // CR-01 Pitfall-1 guard hoisted into the pipeline (mirrors
+        // LayeredDeduplicator.ts:136-143). When BOTH ontologyClass and
+        // entityType are falsy, findByOntologyClass would silently return []
+        // and every input becomes net-new — a silent duplicate-write hazard.
+        // Skip the dedup pre-load for this entity; net-new write at Stage 3
+        // surfaces the missing-ontology via putEntity strict validation.
+        if (!ontologyClass) {
+          process.stderr.write(
+            '[km-core/pipeline] entity ' +
+              String(entity.id) +
+              ' missing ontologyClass/entityType — skipping dedup\n',
+          );
+          dedupDecisions.push({ entity });
+          continue;
+        }
         // D-46 active-only candidate pool (Phase 39 D-34 default filter).
         const candidates = await this.store.findByOntologyClass(ontologyClass);
         const dedupResult: DedupResult = await this.deduplicator.dedup(
@@ -284,8 +299,8 @@ export class IngestPipeline {
   // Per Q3 + A6, runStage does NOT fire onPhase callbacks — the contract
   // is identical to invoking the underlying stage directly.
 
-  /** Run only the extract stage. */
-  runStage(name: 'extract', input: string, opts: { provenance: ProvenanceStamp }): Promise<Entity[]>;
+  /** Run only the extract stage. `provenance` is NOT needed (CR-04 fix); `opts.domain` threads through to extractor.extract. */
+  runStage(name: 'extract', input: string, opts?: { domain?: string }): Promise<Entity[]>;
   /** Run only the dedup stage against a caller-supplied candidate pool. */
   runStage(name: 'dedup', input: Entity, opts: { candidates: Entity[] }): Promise<DedupResult>;
   /** Run only the store stage; `opts.supersedes` is an optional id→id map. */
@@ -298,18 +313,19 @@ export class IngestPipeline {
   async runStage(
     name: StageName,
     input: string | Entity | Entity[] | EntityId[],
-    opts: {
+    opts?: {
       provenance?: ProvenanceStamp;
       candidates?: Entity[];
       supersedes?: Map<EntityId, EntityId>;
+      domain?: string;
     },
   ): Promise<Entity[] | DedupResult | void> {
     switch (name) {
       case 'extract': {
-        return this.extractor.extract(input as string, undefined);
+        return this.extractor.extract(input as string, opts?.domain);
       }
       case 'dedup': {
-        if (!opts.candidates) {
+        if (!opts?.candidates) {
           throw new Error(
             "runStage('dedup') requires opts.candidates — pre-loaded ontologyClass-scoped pool per D-46",
           );
@@ -317,7 +333,7 @@ export class IngestPipeline {
         return this.deduplicator.dedup(input as Entity, opts.candidates);
       }
       case 'store': {
-        if (!opts.provenance) {
+        if (!opts?.provenance) {
           throw new Error(
             "runStage('store') requires opts.provenance (CF-D30 — pipeline does not invent provenance)",
           );
@@ -339,7 +355,7 @@ export class IngestPipeline {
         return stored;
       }
       case 'synthesize': {
-        if (!opts.provenance) {
+        if (!opts?.provenance) {
           throw new Error(
             "runStage('synthesize') requires opts.provenance (CF-D30 — pipeline does not invent provenance)",
           );
