@@ -12,6 +12,7 @@
 import { describe, test, expect, vi } from 'vitest';
 import {
   LLMSemanticMatcher,
+  LLMDedupParseError,
   type LLMClient,
 } from '../../src/dedup/LLMSemanticMatcher.js';
 import { mkEntity } from './_helpers/fakes.js';
@@ -278,5 +279,90 @@ describe('LLMSemanticMatcher', () => {
     // payload contains the literal twice; this assertion proves the
     // existingNames side is no longer filtered.)
     expect(userContent.match(/UserAuthService/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
+  // Plan 40-10: CR-03 typed parse error + Contract A (`{`-presence drives
+  // parse-error vs silent-no-match) + WR-08 candidate-list-of-tries unwrap.
+  // See .planning/phases/40-ingest-pipeline-layered-dedup/40-10-PLAN.md.
+
+  test("CR-03: parseDedupResponse returns no-match + stderr-warn when LLM attempted JSON but it's unparseable (onError: skip, default)", async () => {
+    const client = makeMockLLMClient({
+      raw: 'I cannot determine duplicates {not really json — see context above.',
+    });
+    const matcher = new LLMSemanticMatcher({ client });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const result = await matcher.match(
+        mkEntity({ name: 'Foo' }),
+        [mkEntity({ name: 'Bar' })],
+      );
+      expect(result).toEqual({ matched: false, confidence: 0 });
+      const stderrJoined = stderrSpy.mock.calls.map(([c]) => String(c)).join('');
+      expect(stderrJoined).toContain('[km-core/dedup/llm]');
+      expect(stderrJoined).toContain('parse error');
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  test("CR-03: onError: 'throw' propagates LLMDedupParseError (typed; not raw SyntaxError)", async () => {
+    const client = makeMockLLMClient({
+      raw: 'Sure here is the JSON: {invalid json content with mismatched braces}}',
+    });
+    const matcher = new LLMSemanticMatcher({ client, onError: 'throw' });
+    let thrown: unknown;
+    try {
+      await matcher.match(
+        mkEntity({ name: 'Foo' }),
+        [mkEntity({ name: 'Bar' })],
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(LLMDedupParseError);
+    expect(thrown).not.toBeInstanceOf(SyntaxError);
+    const err = thrown as LLMDedupParseError;
+    expect(err.raw.startsWith('Sure here is the JSON')).toBe(true);
+    expect(err.cause).toBeDefined();
+  });
+
+  test('WR-08: anchored-fence-matches-but-empty falls through to bare-brace stage', async () => {
+    const raw =
+      '```json\n\n```\n\nActually, here are the matches: {"matches":[{"newName":"UserAuthService","existingName":"AuthSvc"}]}';
+    const client = makeMockLLMClient({ raw });
+    const matcher = new LLMSemanticMatcher({ client });
+    const entity = mkEntity({ name: 'UserAuthService' });
+    const candidate = mkEntity({
+      id: '0192a000-0000-7000-8000-0000000000aa' as unknown as ReturnType<
+        typeof mkEntity
+      >['id'],
+      name: 'AuthSvc',
+    });
+    const result = await matcher.match(entity, [candidate]);
+    expect(result.matched).toBe(true);
+    expect(result.survivor?.name).toBe('AuthSvc');
+  });
+
+  test("CR-03: prose-only response (no `{`) yields silent no-match — no stderr, no throw", async () => {
+    const proseOnly = 'I cannot determine duplicates — please provide more context.';
+    const client = makeMockLLMClient({ raw: proseOnly });
+    const skipMatcher = new LLMSemanticMatcher({ client });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const skipResult = await skipMatcher.match(
+        mkEntity({ name: 'Foo' }),
+        [mkEntity({ name: 'Bar' })],
+      );
+      expect(skipResult).toEqual({ matched: false, confidence: 0 });
+      expect(stderrSpy).not.toHaveBeenCalled();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+    // Same fixture against onError: 'throw' — must NOT throw (no `{` =
+    // no parse attempt = no parse error to surface).
+    const throwMatcher = new LLMSemanticMatcher({ client, onError: 'throw' });
+    await expect(
+      throwMatcher.match(mkEntity({ name: 'Foo' }), [mkEntity({ name: 'Bar' })]),
+    ).resolves.toEqual({ matched: false, confidence: 0 });
   });
 });
