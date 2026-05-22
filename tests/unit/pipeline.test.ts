@@ -394,4 +394,91 @@ describe('IngestPipeline (PIPE-01 4-stage orchestrator)', () => {
     expect(entityArg.supersedes).toBe(survivor.id);
     expect(entityArg.name).toBe('New');
   });
+
+  test('CR-01: missing ontologyClass + entityType — pipeline skips findByOntologyClass and stderr-warns', async () => {
+    // Pitfall-1 path: entity has neither ontologyClass nor a usable entityType.
+    // The pipeline must NOT call store.findByOntologyClass(undefined) — instead
+    // it must stderr-warn with the [km-core/pipeline] prefix and fall through
+    // to a net-new write (LayeredDeduplicator.ts:136-143 idiom hoisted into
+    // the pipeline per REVIEW.md CR-01).
+    const broken = mkEntity({
+      id: '0192a000-0000-7000-8000-000000000401' as EntityId,
+      name: 'NoOntologyEntity',
+      ontologyClass: undefined as unknown as string,
+      entityType: '',
+    });
+
+    const extractor = makeFakeExtractor([broken]);
+    const deduplicator = new LayeredDeduplicator({
+      exactName: makeLayerStub({ kind: 'exactName', willMatch: false }),
+    });
+    const synthesizer = makeFakeSynthesizer();
+
+    const findSpy = vi.spyOn(ctx.store, 'findByOntologyClass');
+    const putSpy = vi
+      .spyOn(ctx.store, 'putEntity')
+      .mockResolvedValue(broken.id);
+    const stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+
+    const pipeline = new IngestPipeline(ctx.store, {
+      extractor,
+      deduplicator,
+      synthesizer,
+    });
+
+    const result = await pipeline.ingest('some text', { provenance: PROV });
+
+    // findByOntologyClass MUST NOT be called for an entity with no
+    // ontologyClass / entityType — that's the silent-duplicate-write hazard
+    // CR-01 is closing.
+    expect(findSpy).not.toHaveBeenCalled();
+
+    // The entity STILL gets written (net-new fall-through) — Stage 3 putEntity
+    // strict validation will surface the missing-ontology downstream if any.
+    expect(putSpy).toHaveBeenCalledTimes(1);
+
+    // stderr-warn fired with the [km-core/pipeline] prefix + entity id +
+    // "missing ontologyClass" phrasing.
+    const stderrCalls = stderrSpy.mock.calls.map(([c]) => String(c)).join('');
+    expect(stderrCalls).toContain('[km-core/pipeline]');
+    expect(stderrCalls).toContain(String(broken.id));
+    expect(stderrCalls).toContain('missing ontologyClass');
+
+    // IngestResult shape: 1 extracted, 1 stored, 0 merged.
+    expect(result.extractedCount).toBe(1);
+    expect(result.storedCount).toBe(1);
+    expect(result.mergedCount).toBe(0);
+
+    stderrSpy.mockRestore();
+  });
+
+  test("CR-04: runStage('extract', input, { domain }) threads domain to extractor.extract", async () => {
+    // CR-04 closure: runStage('extract', ...) must thread opts.domain through
+    // to extractor.extract — matching ingest()'s behavior. The misleading
+    // `provenance` requirement on the overload is dropped (provenance is not
+    // used by extract). Note: this test does NOT import or reference
+    // ProvenanceStamp — that's the point.
+    const extractor = makeFakeExtractor([]);
+    const deduplicator = new LayeredDeduplicator({
+      exactName: makeLayerStub({ kind: 'exactName', willMatch: false }),
+    });
+    const synthesizer = makeFakeSynthesizer();
+
+    const pipeline = new IngestPipeline(ctx.store, {
+      extractor,
+      deduplicator,
+      synthesizer,
+    });
+
+    // Call 1: explicit domain.
+    await pipeline.runStage('extract', 'sample text', { domain: 'coding' });
+    expect(extractor.extract).toHaveBeenLastCalledWith('sample text', 'coding');
+
+    // Call 2: no opts arg at all — must compile after the overload widening
+    // (opts is now optional). domain is forwarded as undefined.
+    await pipeline.runStage('extract', 'sample text');
+    expect(extractor.extract).toHaveBeenLastCalledWith('sample text', undefined);
+  });
 });
