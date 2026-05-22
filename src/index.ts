@@ -120,3 +120,51 @@ export type {
   EmbeddingClient,
   LLMClient,
 } from './dedup/types.js';
+
+// Phase 41 (INT-01 + PIPE-02): online-learning adapter +
+// post-hoc resolveEntities + atomic mergeEntities primitive.
+//
+// INT-01 — Plan 41-02/04: thin read-only adapter that maps A's
+// .data/observation-export/{observations,digests,insights}.json rows to
+// KM-Core Entity instances, plus a library-function `reprojectFromOnlineStore`
+// that pre-stamps Entity.legacyId (top-level, CF-D37) + emits aggregation
+// edges. SC#2 enforced by construction — adapter never opens A's writer.
+//
+// PIPE-02 — Plan 41-05/06: atomic `mergeEntities` primitive (D-50 four-step
+// batch: close duplicate + SUPERSEDED_BY edge + edge rewires + segment
+// fold + survivor write) + user-facing `resolveEntities` post-hoc resolver
+// that wraps Plans 01 (ontology) + 03 (getDegree) + 05 (mergeEntities) +
+// 40 (LLMSemanticLayer) into one callable surface. Operators call
+// `resolveEntities(store, { llmMatcher, provenance, classes?, dryRun? })`
+// from a per-system script (Plan 41-07) or future Phase 44 REST route.
+//
+// Both sub-paths also ship as standalone sub-barrels for consumers who
+// prefer narrower imports:
+//   import { reprojectFromOnlineStore } from '@fwornle/km-core/adapters/online';
+//   import { resolveEntities, mergeEntities } from '@fwornle/km-core/maintenance';
+export { reprojectFromOnlineStore } from './adapters/online/index.js';
+export type {
+  ReprojectOptions,
+  ReprojectResult,
+  ReprojectCheckpoint,
+  ReprojectSources,
+  ProgressEvent,
+} from './adapters/online/index.js';
+export {
+  mapObservationRow,
+  mapDigestRow,
+  mapInsightRow,
+} from './adapters/online/index.js';
+export type {
+  ObservationRow,
+  DigestRow,
+  InsightRow,
+} from './adapters/online/index.js';
+export { resolveEntities, mergeEntities } from './maintenance/index.js';
+export type {
+  ResolveOptions,
+  ResolveResult,
+  ResolveEvent,
+  MergeOptions,
+  MergeResult,
+} from './maintenance/index.js';
