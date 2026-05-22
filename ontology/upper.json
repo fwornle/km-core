@@ -1,0 +1,22 @@
+{
+  "meta": {
+    "name": "upper",
+    "version": "1.0.0",
+    "description": "KM-Core live upper ontology — LearningArtifact axis (Phase 41)."
+  },
+  "classes": {
+    "LearningArtifact": {
+      "defaultLayer": "evidence",
+      "description": "Abstract upper class for online-learning artifacts (Observation/Digest/Insight tiers).",
+      "relationships": {},
+      "properties": {
+        "id": { "type": "string", "required": true },
+        "project": { "type": "string" },
+        "createdAt": { "type": "string", "required": true },
+        "validFrom": { "type": "string" },
+        "validUntil": { "type": "string" },
+        "quality": { "type": "string" }
+      }
+    }
+  }
+}
