@@ -761,3 +761,82 @@ describe('Phase 39 — supersession + active-only filter (D-33/D-34/D-35)', () =
     expect(rels[0]!.to).toBe(newId);
   });
 });
+
+// Phase 41 Plan 03 — APPENDED tests for `getDegree(id)` public method.
+// Sibling describe block — do NOT modify the existing blocks above. Tests pin
+// literal degree values per the deterministic semantics of
+// graphology@^0.26's `MultiDirectedGraph.degree(node)`:
+//   - degree(node) is the sum of inDegree + outDegree for `node`.
+//   - For a single directed edge A→B: degree(A) === 1 and degree(B) === 1
+//     (A contributes 1 outgoing, B contributes 1 incoming).
+//   - For 3 outgoing edges A→B, A→C, A→D: degree(A) === 3.
+//   - Missing nodes return 0 (caller-friendly contract; never throws).
+// These values are the contract Plan 06 (`resolveEntities`) relies on for
+// OKM-pattern survivor-selection.
+describe('getDegree (Phase 41 Plan 03)', () => {
+  let ctx: Ctx;
+
+  function mkProvenance(suffix: string): ProvenanceStamp {
+    return {
+      provider: 'test',
+      model: 'test-model',
+      runId: `run-${suffix}`,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  beforeEach(async () => {
+    ctx = makeStore();
+    await ctx.store.open();
+  });
+
+  afterEach(async () => {
+    await ctx.store.close();
+    fs.rmSync(ctx.tmpdir, { recursive: true, force: true });
+  });
+
+  test('Test A: single directed edge A→B gives both endpoints degree === 1', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    const bId = await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component' },
+      { provenance: mkProvenance('B') },
+    );
+    await ctx.store.addRelation({ type: 'CONTAINS', from: aId, to: bId });
+    expect(await ctx.store.getDegree(aId)).toBe(1);
+    expect(await ctx.store.getDegree(bId)).toBe(1);
+  });
+
+  test('Test B: 3 outgoing edges from A yield degree(A) === 3', async () => {
+    const aId = await ctx.store.putEntity(
+      { name: 'A', entityType: 'Component' },
+      { provenance: mkProvenance('A') },
+    );
+    const bId = await ctx.store.putEntity(
+      { name: 'B', entityType: 'Component' },
+      { provenance: mkProvenance('B') },
+    );
+    const cId = await ctx.store.putEntity(
+      { name: 'C', entityType: 'Component' },
+      { provenance: mkProvenance('C') },
+    );
+    const dId = await ctx.store.putEntity(
+      { name: 'D', entityType: 'Component' },
+      { provenance: mkProvenance('D') },
+    );
+    await ctx.store.addRelation({ type: 'CONTAINS', from: aId, to: bId });
+    await ctx.store.addRelation({ type: 'CONTAINS', from: aId, to: cId });
+    await ctx.store.addRelation({ type: 'CONTAINS', from: aId, to: dId });
+    expect(await ctx.store.getDegree(aId)).toBe(3);
+  });
+
+  test('Test C: getDegree on nonexistent id returns 0 and does not throw', async () => {
+    const missing = 'nonexistent-id' as unknown as EntityId;
+    // Must not throw, AND must return exactly 0 (caller-friendly contract;
+    // Plan 06 relies on `0` rather than an exception when one or both of a
+    // pair has been deleted by a concurrent merge).
+    await expect(ctx.store.getDegree(missing)).resolves.toBe(0);
+  });
+});
