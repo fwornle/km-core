@@ -87,3 +87,36 @@ export type {
   BackfillResolver,
   BackfillResult,
 } from './backfill/index.js';
+
+// Phase 40 (PIPE-01 + DEDUP-01): 4-stage ingest framework + layered
+// deduplication primitives. Caller-pluggable Extractor / Synthesizer /
+// EmbeddingClient / LLMClient interfaces — A and B (Phase 41/42) wire
+// their own concrete clients. Per-layer thresholds on the layer ctors;
+// short-circuit-on-first-match per D-44. Pipeline threads ProvenanceStamp
+// through all 4 stages; the store stage uses Phase 39 putEntity which
+// handles supersession closure atomically (CR-01 widening covers legacy
+// non-v7 predecessor ids).
+export { IngestPipeline } from './pipeline/IngestPipeline.js';
+export type {
+  IngestPipelineOpts,
+  IngestOpts,
+  IngestResult,
+  PhaseCallback,
+  StageName,
+  Extractor,
+  Synthesizer,
+} from './pipeline/types.js';
+
+export { LayeredDeduplicator } from './dedup/LayeredDeduplicator.js';
+export { JaccardNameMatcher } from './dedup/JaccardNameMatcher.js';
+export { CosineEmbeddingMatcher } from './dedup/CosineEmbeddingMatcher.js';
+export { LLMSemanticMatcher } from './dedup/LLMSemanticMatcher.js';
+export type {
+  ExactNameLayer,
+  EmbeddingLayer,
+  LLMSemanticLayer,
+  MatchResult,
+  DedupResult,
+  EmbeddingClient,
+  LLMClient,
+} from './dedup/types.js';
