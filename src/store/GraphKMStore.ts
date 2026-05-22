@@ -619,6 +619,42 @@ export class GraphKMStore extends EventEmitter {
   }
 
   /**
+   * Phase 41 Plan 03 — total degree (in + out) for `id`.
+   *
+   * Thin wrapper around graphology@^0.26's `MultiDirectedGraph.degree(node)`,
+   * which returns the SUM of inDegree + outDegree. Distinct from the
+   * separate `inDegree` / `outDegree` accessors graphology also exposes —
+   * we intentionally surface only the total because the sole Phase 41
+   * caller (`resolveEntities`, Plan 06) compares totals to break ties
+   * between merge-candidate pairs (OKM survivor-selection heuristic ported
+   * from `_work/.../okm/src/ingestion/deduplicator.ts:711-719` — "prefer the
+   * higher-degree node when merging duplicates"). YAGNI applies to
+   * `inDegree`/`outDegree` separately; they can be added later if needed.
+   *
+   * Pinned semantics (asserted by tests A and B in
+   * `tests/unit/graph-store.test.ts`):
+   *   - SINGLE directed edge A→B: degree(A) === 1 (one outgoing counted
+   *     once for A) AND degree(B) === 1 (one incoming counted once for B).
+   *   - 3 outgoing edges from A (A→B, A→C, A→D): degree(A) === 3
+   *     (inDegree=0, outDegree=3, total=3). These literal values are the
+   *     contract Plan 06 Test I (degree-based survivor selection) relies on.
+   *
+   * Missing-node contract (test C): returns `0` and does NOT throw. This
+   * is the caller-friendly shape Plan 06's `resolveEntities` expects when
+   * one or both of a pair has been concurrently deleted by an earlier
+   * merge in the same wave — `0` makes the comparison fall through to
+   * the other candidate without special-casing.
+   *
+   * Async signature (`Promise<number>`) matches the rest of the public
+   * surface (Phase 38 `registry.ts` Pattern S4 — async return on sync
+   * underlying op for API consistency).
+   */
+  async getDegree(id: EntityId): Promise<number> {
+    if (!this.graph.hasNode(id)) return 0;
+    return this.graph.degree(id);
+  }
+
+  /**
    * D-35: returns the supersession chain through `id`, ordered by
    * `validFrom` ascending. Walks BACKWARD via `entity.supersedes`
    * (collects predecessors) and FORWARD via `SUPERSEDED_BY` out-edges
