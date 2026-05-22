@@ -1,0 +1,31 @@
+[
+  {
+    "id": "fixture-dig-0001-eeee-eeee-eeeeeeeeeeee",
+    "date": "2026-04-08",
+    "theme": "Status-line health indicator diagnosis",
+    "summary": "Two observations traced the red status-line indicator to the LSL health-prompt-hook decision path; a follow-up edit landed the corporate proxy mode in the allowlist.",
+    "observationIds": [
+      "fixture-obs-0001-aaaa-aaaa-aaaaaaaaaaaa",
+      "fixture-obs-0002-bbbb-bbbb-bbbbbbbbbbbb"
+    ],
+    "agents": ["test-agent"],
+    "filesTouched": ["scripts/combined-status-line.js"],
+    "quality": "high",
+    "createdAt": "2026-04-22T06:48:10.407Z",
+    "project": "coding-test"
+  },
+  {
+    "id": "fixture-dig-0002-ffff-ffff-ffffffffffff",
+    "date": "2026-04-09",
+    "theme": "Corporate network-mode allowlist landed",
+    "summary": "Single observation captured the edit that adds 'corporate' to the statusline's proxy network-mode check; documentation updated alongside the code change.",
+    "observationIds": [
+      "fixture-obs-0003-cccc-cccc-cccccccccccc"
+    ],
+    "agents": ["test-agent"],
+    "filesTouched": ["scripts/combined-status-line.js", "docs-content/guides/status-line.md"],
+    "quality": "high",
+    "createdAt": "2026-04-23T05:22:05.198Z",
+    "project": "coding-test"
+  }
+]

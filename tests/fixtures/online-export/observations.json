@@ -1,0 +1,46 @@
+[
+  {
+    "id": "fixture-obs-0001-aaaa-aaaa-aaaaaaaaaaaa",
+    "summary": "Intent: Trace why the status-line health indicator stayed red despite a healthy coordinator.\nApproach: Read the combined-status-line script and the health-prompt-hook to follow the red-vs-green decision tree.\nArtifacts: none\nResult: Located the LSL health logic; red dot is triggered when the health-prompt-hook writes an unhealthy flag to the health file.",
+    "agent": "test-agent",
+    "project": "coding-test",
+    "quality": "high",
+    "createdAt": "2026-04-08T14:51:25.017Z",
+    "digestedAt": "2026-04-22T06:48:10.407Z",
+    "llm": null,
+    "modifiedFiles": null
+  },
+  {
+    "id": "fixture-obs-0002-bbbb-bbbb-bbbbbbbbbbbb",
+    "summary": "Intent: Trace why the status-line health indicator stayed red despite a healthy coordinator.  \nApproach: Read the combined-status-line script and the health-prompt-hook to follow the red-vs-green decision tree.\nArtifacts: none\nResult: Located the LSL health logic; red dot is triggered when the health-prompt-hook writes an unhealthy flag to the health file.",
+    "agent": "test-agent",
+    "project": "coding-test",
+    "quality": "high",
+    "createdAt": "2026-04-08T15:02:11.443Z",
+    "digestedAt": null,
+    "llm": "groq:llama-3.3-70b-versatile",
+    "modifiedFiles": ["scripts/combined-status-line.js"]
+  },
+  {
+    "id": "fixture-obs-0003-cccc-cccc-cccccccccccc",
+    "summary": "Intent: Add the corporate proxy mode to the network-mode allowlist in the statusline.\nApproach: Edit combined-status-line.js to accept 'corporate' alongside 'vpn' and 'public'.\nArtifacts: scripts/combined-status-line.js\nResult: 'corporate' now passes the proxy-mode check so the statusline stops flagging an error during BMW CN runs.",
+    "agent": "test-agent",
+    "project": "coding-test",
+    "quality": "high",
+    "createdAt": "2026-04-09T09:14:02.118Z",
+    "digestedAt": "2026-04-23T05:22:05.198Z",
+    "llm": "anthropic:claude-3-5-sonnet",
+    "modifiedFiles": ["scripts/combined-status-line.js", "docs-content/guides/status-line.md"]
+  },
+  {
+    "id": "fixture-obs-0004-dddd-dddd-dddddddddddd",
+    "summary": "",
+    "agent": "test-agent",
+    "project": "coding-test",
+    "quality": "normal",
+    "createdAt": "2026-04-10T11:00:00.000Z",
+    "digestedAt": null,
+    "llm": null,
+    "modifiedFiles": null
+  }
+]

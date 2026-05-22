@@ -1,0 +1,14 @@
+[
+  {
+    "id": "fixture-ins-0001-9999-9999-999999999999",
+    "topic": "Statusline Health Display — Corporate Proxy & LSL Indicator",
+    "summary": "## Purpose\nDiagnose and extend the tmux statusline health rendering for the LSL red/green indicator and the corporate proxy network-mode allowlist.\n\n## Key Files\n- `scripts/combined-status-line.js` — proxy-mode allowlist + LSL health rendering\n- `docs-content/guides/status-line.md` — reference docs updated to match",
+    "confidence": 0.92,
+    "digestIds": [
+      "fixture-dig-0001-eeee-eeee-eeeeeeeeeeee",
+      "fixture-dig-0002-ffff-ffff-ffffffffffff"
+    ],
+    "project": "coding-test",
+    "createdAt": "2026-04-24T08:00:00.000Z"
+  }
+]
