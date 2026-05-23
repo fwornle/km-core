@@ -22,12 +22,23 @@
 //     resolver. Wraps Plans 01 (ontology) + 03 (getDegree) + 05
 //     (mergeEntities) + caller-supplied LLMSemanticLayer (Plan 40) into
 //     one callable surface.
+//   - Phase 42 Plan 04 (syncQdrantFromStore): post-hoc Qdrant rebuild from
+//     km-core's canonical entity store. Reads all entities with non-empty
+//     embedding and upserts them to a caller-supplied Qdrant client
+//     (km-core stays Qdrant-agnostic at the type level — D-52a).
 
 export { resolveEntities } from './resolveEntities.js';
 export { mergeEntities } from './mergeEntities.js';
+export { syncQdrantFromStore } from './syncQdrantFromStore.js';
 export type {
   ResolveOptions,
   ResolveResult,
   ResolveEvent,
 } from './resolveEntities.js';
 export type { MergeOptions, MergeResult } from './mergeEntities.js';
+export type {
+  QdrantClient,
+  SyncQdrantOptions,
+  SyncQdrantResult,
+  SyncQdrantEvent,
+} from './syncQdrantFromStore.js';
