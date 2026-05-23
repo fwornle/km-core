@@ -171,3 +171,38 @@ export type {
   MergeOptions,
   MergeResult,
 } from './maintenance/index.js';
+
+// Phase 42 (INT-02): Offline UKB Migration (B) surfaces.
+//
+// D-52  — Entity.embedding?: number[] schema extension lives in
+//         src/types/entity.ts (no separate barrel — it's just a field).
+// D-52a — syncQdrantFromStore maintenance op: rebuild a Qdrant index
+//         from km-core's canonical entity store. km-core stays
+//         Qdrant-agnostic; caller supplies the QdrantClient instance.
+//         Re-exported from ./maintenance above for source-locality;
+//         the additional re-export below covers callers who reach for
+//         it directly via the root barrel.
+// D-52c — FastembedEmbeddingClient: default EmbeddingClient impl
+//         wrapping fastembed AllMiniLML6V2 (384-dim). Drop-in
+//         replacement for any consumer of the Phase 40
+//         EmbeddingClient interface (CosineEmbeddingMatcher,
+//         LayeredDeduplicator, IngestPipeline).
+//
+// Sub-paths:
+//   import { FastembedEmbeddingClient } from '@fwornle/km-core/embeddings';
+//   import { syncQdrantFromStore } from '@fwornle/km-core/maintenance';
+// Or via the root barrel (this file):
+//   import { FastembedEmbeddingClient, syncQdrantFromStore } from '@fwornle/km-core';
+export { syncQdrantFromStore } from './maintenance/syncQdrantFromStore.js';
+export type {
+  QdrantClient,
+  SyncQdrantOptions,
+  SyncQdrantResult,
+  SyncQdrantEvent,
+} from './maintenance/syncQdrantFromStore.js';
+export { FastembedEmbeddingClient } from './embeddings/FastembedEmbeddingClient.js';
+export type {
+  FastembedEmbeddingClientOpts,
+  FastembedQueryable,
+  FlagEmbeddingInit,
+} from './embeddings/FastembedEmbeddingClient.js';
