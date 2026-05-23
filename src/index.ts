@@ -60,6 +60,9 @@ export { registryBackedValidator } from './validation/ontology.js';
 export { OntologyRegistry } from './ontology/registry.js';
 export type { OntologyRegistryOptions } from './ontology/registry.js';
 export { loadOntologyFile } from './ontology/loader.js';
+// Phase 41 helper — bundled ontology dir for default-class resolution
+// in resolveEntities. See ontology/defaultDir.ts for the rationale.
+export { defaultOntologyDir } from './ontology/defaultDir.js';
 export type {
   OntologyFile,
   OntologyClass,

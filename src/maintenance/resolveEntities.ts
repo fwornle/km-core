@@ -263,7 +263,11 @@ function resolveTargetClasses(
   const registry = store.ontology;
   if (registry === undefined) {
     throw new Error(
-      'resolveEntities: opts.classes omitted but store has no ontology registry (set ontologyDir in GraphKMStore constructor)',
+      "resolveEntities: opts.classes omitted but store has no ontology registry. " +
+        "Construct the store with the bundled km-core ontology via " +
+        "`new GraphKMStore({ ..., ontologyDir: defaultOntologyDir() })` " +
+        "(both exported from '@fwornle/km-core'), or pass an explicit " +
+        '`classes: ["Observation", "Digest", "Insight"]` to resolveEntities.',
     );
   }
 
