@@ -145,6 +145,31 @@ export interface Entity {
   supersedes?: EntityId;
   /** Origin-system bridge populated by the Phase 39 backfill (D-13). */
   legacyId?: { system: 'A' | 'B' | 'C'; id: string };
+  /** Optional embedding vector — Phase 42 D-52 schema extension.
+   *
+   *  - **Origin (D-52):** Added so KM-Core becomes the single source of
+   *    truth for entity embeddings; Qdrant ceases to be a primary store
+   *    and is rebuilt on demand from km-core via `syncQdrantFromStore`
+   *    (D-52a). System B (`mcp-server-semantic-analysis`) writes
+   *    embeddings on every entity put after Phase 42's wave-controller
+   *    migration; System A is a no-op (A does not compute embeddings).
+   *  - **Optional by design:** Phase 37-41 fixtures + A-side entities do
+   *    NOT carry an embedding. Keeping the field optional means the
+   *    schema is a strict extension — no migration required on the read
+   *    side, no compile breakage for older callers.
+   *  - **No special handling in the store:** Graphology treats
+   *    `embedding` as just another attribute. `putEntity`, `getEntity`,
+   *    `mergeAttributes` (CF-D37), `iterate`, and the JSON export all
+   *    pass the array through verbatim. The store does NOT validate
+   *    shape, dimension, or finiteness — that is the consumer's job.
+   *  - **Convention (D-52c):** When set by the default
+   *    `FastembedEmbeddingClient` (Phase 42 Plan 04), the array length
+   *    is 384 (fastembed `AllMiniLML6V2`). Other consumers may supply
+   *    different dimensions; km-core does NOT enforce dimension at the
+   *    type level — Qdrant collection contracts + downstream
+   *    semantic-search consumers carry the dimension invariant.
+   */
+  embedding?: number[];
 }
 
 /**
