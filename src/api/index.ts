@@ -7,12 +7,12 @@
 // The sub-path `@fwornle/km-core/api` is wired in package.json `exports`
 // (added in this plan per 44-PATTERNS.md § `lib/km-core/package.json`). The
 // finer-grained `@fwornle/km-core/api/contracts` sub-path is wired in
-// parallel — consumers may import from either path. Once Plan 44-06 lands
-// the root-barrel re-export, the symbols also become reachable via
-// `@fwornle/km-core` directly.
+// parallel — consumers may import from either path.
 //
-// Plan 44-06 will add `createKmCoreRouter` to this barrel; this plan ships
-// only the contracts surface.
+// Plan 44-06 adds `createKmCoreRouter` + `createKMRoutes` plus the supporting
+// types to this barrel. The factory attaches the 15 canonical /api/v1 endpoint
+// handlers to a caller-supplied Router-like object (CONTEXT R-2 revised —
+// km-core stays Express-free; caller passes their own Router instance).
 
 export {
   ProvenanceStampSchema,
@@ -44,3 +44,11 @@ export type {
   OntologyClassesEndpointResponseT,
   StatsResponseT,
 } from './contracts.js';
+
+// Phase 44 Plan 06: keystone router factory + framework-agnostic route descriptors.
+export { createKmCoreRouter, createKMRoutes } from './router.js';
+export type {
+  KmCoreRouterOptions,
+  RouterLike,
+  RouteDescriptor,
+} from './router.js';

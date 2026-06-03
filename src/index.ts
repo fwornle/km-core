@@ -206,3 +206,47 @@ export type {
   FastembedQueryable,
   FlagEmbeddingInit,
 } from './embeddings/FastembedEmbeddingClient.js';
+
+// Phase 44 (API-01 + API-02): common REST router + Zod contracts + git-snapshot manager.
+//
+// API-01 — Plan 44-06: `createKmCoreRouter(store, router, opts)` factory ships
+//          the canonical ~15-endpoint surface (entities CRUD, relations CRUD,
+//          query, export, stats, ontology/*, graph/*, clusters, snapshots/*).
+//          km-core stays framework-agnostic — consumer passes their own
+//          express.Router(). Mount at `/api/v1/` on A/B/C.
+//
+// API-02 — Plan 44-04 + Plan 44-06: `SnapshotManager` git-backed snapshot/
+//          restore over `.data/exports/`. Snapshot IDs = git tags
+//          (`snapshot/<label>-<ts>`). Restore = `git checkout <tag> --
+//          exportsRel/` + caller wipes LevelDB and restarts (S-2 hard-reset
+//          + S-2 revised: handler wraps with restartRequired:true).
+//
+// A-4 — Plan 44-05: observation-view adapter (Entity → legacy reshape) for A's
+//        typed views at /api/coding/{observations,digests,insights}.
+//
+// Sub-paths:
+//   import { createKmCoreRouter } from '@fwornle/km-core/api';
+//   import { EntitySchema } from '@fwornle/km-core/api/contracts';
+//   import { SnapshotManager } from '@fwornle/km-core/snapshots';
+// Or via the root barrel (this file).
+export { createKmCoreRouter, createKMRoutes } from './api/index.js';
+export type {
+  KmCoreRouterOptions,
+  RouterLike,
+  RouteDescriptor,
+} from './api/index.js';
+export { SnapshotManager } from './snapshots/SnapshotManager.js';
+export type {
+  SnapshotEntry,
+  SnapshotManagerOptions,
+} from './snapshots/SnapshotManager.js';
+export {
+  observationToLegacy,
+  digestToLegacy,
+  insightToLegacy,
+} from './adapters/observation-view.js';
+export type {
+  LegacyObservation,
+  LegacyDigest,
+  LegacyInsight,
+} from './adapters/observation-view.js';
