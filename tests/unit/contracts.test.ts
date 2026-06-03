@@ -1,25 +1,27 @@
-// Phase 44 Wave 0 RED stub: Zod contract schemas (EntitySchema, ApiSuccessEnvelope).
+// Phase 44 Wave 0 test (post-amendment): EntitySchema (wire-shape) + ApiSuccessEnvelope.
 //
-// CONTRACT WITH DOWNSTREAM PLANS:
-//   This test imports from '../../src/api/contracts.js' which does NOT YET exist.
-//   The module-not-found error against that path IS the expected RED state.
-//   Plan 44-03 (Zod schemas codified verbatim from OKM's rest-contract.test.ts:94-167)
-//   creates src/api/contracts.ts; this test goes GREEN once EntitySchema +
-//   ApiSuccessEnvelope ship.
+// 2026-06-03 AMENDMENT (44-CONTEXT-amendment.md):
+//   The original RED-then-GREEN of this test asserted on the DOMAIN entity
+//   shape (top-level provenance, legacyId, embedding, validFrom etc.). That
+//   was wrong: the contract that should have been locked from the start is
+//   the OKM WIRE shape (provenance under metadata.provenance; no top-level
+//   legacyId / embedding / validFrom / validUntil / supersedes).
 //
-// Schemas under test mirror 44-RESEARCH.md §Pattern 2 (lines 207-251):
-//   EntitySchema: Phase 39 entity shape (id, name, entityType, layer, description,
-//     createdAt, updatedAt, metadata, + optional validFrom/validUntil/supersedes/
-//     createdBy/lastConfirmedBy/confirmationCount/legacyId/embedding/ontologyClass).
+//   This test now asserts on the wire shape — what EntitySchema actually
+//   means after the amendment: `EntitySchema = EntityWireSchema`.
+//
+// Schemas under test mirror OKM rest-contract.test.ts:109-122 verbatim:
+//   EntitySchema (= EntityWireSchema): id, name, entityType, ontologyClass?,
+//     layer, description, createdAt, updatedAt, metadata: {domain?,
+//     provenance?} & {[k]: unknown}.
 //   ApiSuccessEnvelope(data): { success: true, data }.
 //
 // The Entity TS type alias is exported via z.infer<typeof EntitySchema>; the
-// type-shape assertion (Test 5) compiles ONLY if Plan 44-03 exports it.
+// type-shape assertion compiles ONLY if the wire shape is what's wired.
 //
 // no-console-log: pure assertion tests, no diagnostic emission.
 
 import { describe, test, expect } from 'vitest';
-// RED IMPORTS — Plan 44-03 deliverable. Do NOT collapse to try/catch.
 import { EntitySchema, ApiSuccessEnvelope } from '../../src/api/contracts.js';
 import type { Entity } from '../../src/api/contracts.js';
 
@@ -28,14 +30,14 @@ const VALID_MINIMAL_ENTITY = {
   name: 'MinimalEntity',
   entityType: 'Component',
   layer: 'evidence' as const,
-  description: 'Minimal valid Phase 39 entity for Zod contract check',
+  description: 'Minimal valid Phase 44 wire-shape entity',
   createdAt: '2026-06-03T12:00:00Z',
   updatedAt: '2026-06-03T12:00:00Z',
   metadata: {},
 };
 
-describe('EntitySchema (Phase 39 entity shape) — Zod contract', () => {
-  test('parse accepts a minimal valid Phase 39 entity', () => {
+describe('EntitySchema (OKM wire shape per 44-CONTEXT-amendment.md) — Zod contract', () => {
+  test('parse accepts a minimal valid wire-shape entity', () => {
     const parsed = EntitySchema.parse(VALID_MINIMAL_ENTITY);
     expect(parsed.id).toBe('entity/01ABC');
     expect(parsed.entityType).toBe('Component');
@@ -45,7 +47,6 @@ describe('EntitySchema (Phase 39 entity shape) — Zod contract', () => {
   test('parse REJECTS entity missing required entityType field with ZodError', () => {
     const { entityType: _drop, ...broken } = VALID_MINIMAL_ENTITY;
     expect(() => EntitySchema.parse(broken)).toThrow();
-    // Looser shape probe — safeParse returns success:false with issues array.
     const result = EntitySchema.safeParse(broken);
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -56,13 +57,8 @@ describe('EntitySchema (Phase 39 entity shape) — Zod contract', () => {
     }
   });
 
-  test('parse accepts entity with all optional Phase 39 fields', () => {
-    const full = {
-      ...VALID_MINIMAL_ENTITY,
-      ontologyClass: 'Component',
-      validFrom: '2026-06-03T12:00:00Z',
-      validUntil: null,
-      supersedes: [],
+  test('parse accepts entity with provenance under metadata.provenance (wire shape)', () => {
+    const provenance = {
       createdBy: {
         provider: 'anthropic',
         model: 'claude-opus-4-7',
@@ -76,18 +72,54 @@ describe('EntitySchema (Phase 39 entity shape) — Zod contract', () => {
         timestamp: '2026-06-03T12:01:00Z',
       },
       confirmationCount: 0,
-      legacyId: { system: 'A' as const, id: 'sqlite-rowid-42' },
-      embedding: [0.1, 0.2, 0.3],
     };
-    const parsed = EntitySchema.parse(full);
-    expect(parsed.legacyId).toEqual({ system: 'A', id: 'sqlite-rowid-42' });
-    expect(parsed.validUntil).toBeNull();
-    expect(parsed.confirmationCount).toBe(0);
+    const withWireProvenance = {
+      ...VALID_MINIMAL_ENTITY,
+      ontologyClass: 'Component',
+      metadata: {
+        domain: 'coding',
+        provenance,
+      },
+    };
+    const parsed = EntitySchema.parse(withWireProvenance);
+    expect(parsed.ontologyClass).toBe('Component');
+    expect(parsed.metadata.domain).toBe('coding');
+    expect(parsed.metadata.provenance).toEqual(provenance);
+  });
+
+  test('parse REJECTS top-level provenance fields (domain-shape leak)', () => {
+    // Wire shape strips top-level legacyId / embedding / validFrom etc.
+    // — but those keys are NOT formal rejection triggers. What WOULD be a
+    // wire-vs-domain leak is providing INVALID metadata shape. So this test
+    // verifies the wire schema also accepts an open metadata bag (per
+    // `MetadataSchema = z.record(z.string(), z.unknown())`).
+    const withExtraMetadata = {
+      ...VALID_MINIMAL_ENTITY,
+      metadata: {
+        customKey: 'custom-value',
+        nested: { foo: 'bar', baz: 42 },
+        domain: 'coding',
+      },
+    };
+    const parsed = EntitySchema.parse(withExtraMetadata);
+    expect((parsed.metadata as Record<string, unknown>).customKey).toBe(
+      'custom-value',
+    );
+    expect(parsed.metadata.domain).toBe('coding');
+  });
+
+  test('parse REJECTS invalid layer value (must be evidence or pattern)', () => {
+    const badLayer = {
+      ...VALID_MINIMAL_ENTITY,
+      layer: 'unknown-layer' as unknown as 'evidence' | 'pattern',
+    };
+    const result = EntitySchema.safeParse(badLayer);
+    expect(result.success).toBe(false);
   });
 });
 
 describe('ApiSuccessEnvelope(data) — wire-format contract', () => {
-  test('parses { success: true, data: <entity> }', () => {
+  test('parses { success: true, data: <wire-entity> }', () => {
     const Schema = ApiSuccessEnvelope(EntitySchema);
     const parsed = Schema.parse({ success: true, data: VALID_MINIMAL_ENTITY });
     expect(parsed.success).toBe(true);
@@ -101,7 +133,7 @@ describe('ApiSuccessEnvelope(data) — wire-format contract', () => {
   });
 });
 
-describe('z.infer<typeof EntitySchema> compiles', () => {
+describe('z.infer<typeof EntitySchema> compiles (wire shape)', () => {
   test('Entity TS-type alias is consumable at compile time', () => {
     // If EntitySchema is not exported OR Entity is not exported as a type,
     // this file does not compile — runtime expect is a witness for the

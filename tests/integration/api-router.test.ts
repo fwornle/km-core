@@ -95,13 +95,16 @@ describe('createKmCoreRouter — canonical /api/v1 surface', () => {
     expect(res.body).toEqual({ success: true, data: [] });
   });
 
-  test('POST /api/v1/entities + GET round-trip persists created entity', async () => {
+  test('POST /api/v1/entities + GET round-trip persists created entity (wire shape)', async () => {
+    // 44-CONTEXT-amendment.md: responses are projected through entityToWire
+    // — top-level legacyId / embedding / validFrom / validUntil / supersedes
+    // are stripped; provenance lives inside metadata.provenance when present.
     const body = {
       name: 'TestComponent',
       entityType: 'Component',
       ontologyClass: 'Component',
       layer: 'evidence',
-      description: 'Phase 44 RED stub fixture',
+      description: 'Phase 44 wire-shape fixture',
       metadata: {},
     };
     const postRes = await request(app).post('/api/v1/entities').send(body);
@@ -111,11 +114,23 @@ describe('createKmCoreRouter — canonical /api/v1 surface', () => {
       name: 'TestComponent',
       entityType: 'Component',
     });
+    // Wire shape MUST NOT carry top-level provenance / Phase-39 lineage fields.
+    expect(postRes.body.data.legacyId).toBeUndefined();
+    expect(postRes.body.data.embedding).toBeUndefined();
+    expect(postRes.body.data.validFrom).toBeUndefined();
+    expect(postRes.body.data.validUntil).toBeUndefined();
+    expect(postRes.body.data.supersedes).toBeUndefined();
 
     const getRes = await request(app).get('/api/v1/entities');
     expect(getRes.status).toBe(200);
     expect(Array.isArray(getRes.body.data)).toBe(true);
     expect(getRes.body.data.length).toBeGreaterThanOrEqual(1);
+    // Same wire-shape guarantee on the list response.
+    for (const e of getRes.body.data) {
+      expect(e.legacyId).toBeUndefined();
+      expect(e.embedding).toBeUndefined();
+      expect(e.validFrom).toBeUndefined();
+    }
   });
 
   test('GET /api/v1/entities?ontologyClass=Component filters via store.findByOntologyClass (Pitfall 3 two-field OR)', async () => {
@@ -148,16 +163,28 @@ describe('createKmCoreRouter — canonical /api/v1 surface', () => {
     }
   });
 
-  test('GET /api/v1/stats returns 200 + envelope with entityCount + relationCount', async () => {
+  test('GET /api/v1/stats returns 200 + envelope with OKM wire shape (nodes/edges + 10-field StatsWire)', async () => {
+    // 44-CONTEXT-amendment.md: /stats emits the OKM StatsWire shape
+    // (nodes/edges, NOT entityCount/relationCount), with full 10-field
+    // breakdown per OKM rest-contract.test.ts:216-229.
     const res = await request(app).get('/api/v1/stats');
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data).toEqual(
       expect.objectContaining({
-        entityCount: expect.any(Number),
-        relationCount: expect.any(Number),
+        nodes: expect.any(Number),
+        edges: expect.any(Number),
+        evidenceCount: expect.any(Number),
+        patternCount: expect.any(Number),
+        orphanCount: expect.any(Number),
+        islandCount: expect.any(Number),
+        componentCount: expect.any(Number),
+        connectivity: expect.any(Number),
+        lastUpdated: expect.any(String),
       }),
     );
+    // activeSnapshot is z.unknown().nullable() — must be NULL (never undefined).
+    expect(res.body.data.activeSnapshot).toBeNull();
   });
 
   test('All 15 canonical endpoints are registered (smoke: any status != 404)', async () => {
@@ -174,6 +201,59 @@ describe('createKmCoreRouter — canonical /api/v1 surface', () => {
       process.stderr.write(`[api-router.test] unregistered endpoints:\n${failures.join('\n')}\n`);
     }
     expect(failures).toEqual([]);
+  });
+
+  test('POST /api/v1/relations emits graphology edge envelope wire shape (44-amend)', async () => {
+    // 44-CONTEXT-amendment.md: relations are projected via relationToWire,
+    // emitting {key, source, target, attributes:{type, metadata, createdAt}}
+    // per OKM rest-contract.test.ts:129-138.
+    const e1 = await request(app).post('/api/v1/entities').send({
+      name: 'EntityA',
+      entityType: 'Component',
+      ontologyClass: 'Component',
+      layer: 'evidence',
+      description: 'a',
+      metadata: {},
+    });
+    const e2 = await request(app).post('/api/v1/entities').send({
+      name: 'EntityB',
+      entityType: 'Component',
+      ontologyClass: 'Component',
+      layer: 'evidence',
+      description: 'b',
+      metadata: {},
+    });
+    const relRes = await request(app).post('/api/v1/relations').send({
+      from: e1.body.data.id,
+      to: e2.body.data.id,
+      relationType: 'derivedFrom',
+      metadata: { confidence: 0.9 },
+    });
+    expect(relRes.status).toBe(201);
+    expect(relRes.body.success).toBe(true);
+    // Wire envelope keys.
+    expect(typeof relRes.body.data.key).toBe('string');
+    expect(relRes.body.data.source).toBe(e1.body.data.id);
+    expect(relRes.body.data.target).toBe(e2.body.data.id);
+    expect(relRes.body.data.attributes.type).toBe('derivedFrom');
+    expect(relRes.body.data.attributes.metadata).toEqual({ confidence: 0.9 });
+    expect(typeof relRes.body.data.attributes.createdAt).toBe('string');
+    // Domain-style keys (from/to/relationType at top level) MUST NOT leak.
+    expect(relRes.body.data.from).toBeUndefined();
+    expect(relRes.body.data.to).toBeUndefined();
+    expect(relRes.body.data.relationType).toBeUndefined();
+
+    // GET /relations returns the same wire shape.
+    const getRels = await request(app).get('/api/v1/relations');
+    expect(getRels.status).toBe(200);
+    expect(getRels.body.data.length).toBeGreaterThanOrEqual(1);
+    for (const r of getRels.body.data) {
+      expect(typeof r.key).toBe('string');
+      expect(typeof r.source).toBe('string');
+      expect(typeof r.target).toBe('string');
+      expect(r.attributes).toBeDefined();
+      expect(typeof r.attributes.type).toBe('string');
+    }
   });
 
   test('createKmCoreRouter with { readOnly: true } rejects POST/PUT/DELETE', async () => {
