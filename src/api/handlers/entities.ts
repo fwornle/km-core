@@ -26,6 +26,7 @@ import type { Entity } from '../../types/entity.js';
 import type { EntityId } from '../../ids/branded.js';
 import { mintEntityId } from '../../ids/mint.js';
 import type { RouteDescriptor, KmCoreRouterOptions } from '../router.js';
+import { entityToWire } from '../../adapters/wire-serializers.js';
 
 /**
  * Build entity CRUD route descriptors. Reads use `store.findByOntologyClass`
@@ -77,7 +78,9 @@ export function entityRoutes(
       const sliced =
         effectiveLimit > 0 ? all.slice(offset, offset + effectiveLimit) : all.slice(offset);
 
-      res.json({ success: true, data: sliced });
+      // 44-CONTEXT-amendment.md: emit OKM wire shape (provenance under
+      // metadata.provenance; strip legacyId / embedding / validFrom etc.).
+      res.json({ success: true, data: sliced.map((e) => entityToWire(e)) });
     },
   });
 
@@ -94,7 +97,10 @@ export function entityRoutes(
         return;
       }
       const entity = await store.getEntity(id);
-      res.json({ success: true, data: entity ?? null });
+      res.json({
+        success: true,
+        data: entity ? entityToWire(entity) : null,
+      });
     },
   });
 
@@ -137,7 +143,10 @@ export function entityRoutes(
         // layer when applicable. This mirrors OKM's REST handler behaviour.
         await store.putEntity(entity, { skipOntologyCheck: true });
         const stored = await store.getEntity(id);
-        res.status(201).json({ success: true, data: stored ?? entity });
+        res.status(201).json({
+          success: true,
+          data: entityToWire(stored ?? entity),
+        });
       },
     });
 
@@ -164,7 +173,10 @@ export function entityRoutes(
           updatedAt: new Date().toISOString(),
         });
         const updated = await store.getEntity(id);
-        res.json({ success: true, data: updated });
+        res.json({
+          success: true,
+          data: updated ? entityToWire(updated) : null,
+        });
       },
     });
 

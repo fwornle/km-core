@@ -7,9 +7,9 @@
 //   - GraphKMStore.ts:583 (addRelation), :609 (findRelations), :728 (batch with
 //     removeRelation op) — the underlying store surface.
 //
-// Wire field name is `relationType` (44-CONTEXT C-2 verbatim contract /
-// contracts.ts:117); the internal Relation type uses `type`. Translation
-// happens here at the wire boundary.
+// 2026-06-03 amendment (44-CONTEXT-amendment.md): the wire shape is the OKM
+// graphology edge envelope `{key, source, target, attributes:{type, metadata,
+// createdAt}}` — projected by `relationToWire` from the in-process Relation.
 //
 // no-console-log: this module emits no diagnostics. Error wrapper in router.ts
 // catches thrown errors and maps to {success:false,error}.
@@ -18,23 +18,7 @@ import type { GraphKMStore } from '../../store/GraphKMStore.js';
 import type { Relation } from '../../types/entity.js';
 import type { EntityId } from '../../ids/branded.js';
 import type { RouteDescriptor, KmCoreRouterOptions } from '../router.js';
-
-/**
- * Project an internal Relation into the canonical wire shape (RelationSchema in
- * contracts.ts). Specifically renames `type` to `relationType` and ensures
- * `createdAt` is always present.
- */
-function toWireRelation(r: Relation, key?: string): Record<string, unknown> {
-  const wire: Record<string, unknown> = {
-    from: r.from,
-    to: r.to,
-    relationType: r.type,
-    createdAt: r.createdAt ?? new Date().toISOString(),
-  };
-  if (key !== undefined) wire.key = key;
-  if (r.metadata !== undefined) wire.metadata = r.metadata;
-  return wire;
-}
+import { relationToWire } from '../../adapters/wire-serializers.js';
 
 export function relationRoutes(
   store: GraphKMStore,
@@ -58,7 +42,9 @@ export function relationRoutes(
       const relations = await store.findRelations(filter);
       res.json({
         success: true,
-        data: relations.map((r) => toWireRelation(r)),
+        // 44-CONTEXT-amendment.md: emit graphology edge envelope per OKM
+        // wire shape — relationToWire synthesizes deterministic key when absent.
+        data: relations.map((r) => relationToWire(r)),
       });
     },
   });
@@ -88,7 +74,7 @@ export function relationRoutes(
         await store.addRelation(relation);
         res.status(201).json({
           success: true,
-          data: toWireRelation(relation),
+          data: relationToWire(relation),
         });
       },
     });

@@ -5,9 +5,19 @@
 //     getOntologyEntityTypes, getOntologySchema).
 //   - 44-PATTERNS.md §Shared Patterns — `{success:true,data}` envelope.
 //
+// 2026-06-03 amendment (44-CONTEXT-amendment.md):
+//   - /api/ontology/classes returns an array of class-name STRINGS (OKM
+//     rest-contract.test.ts:257). The previous shape (array of objects with
+//     parent/properties/relationships) was a wrong-shape invention not in
+//     OKM's frozen wire contract.
+//   - /api/ontology/entity-types returns an array of {name, description,
+//     source} objects (OKM rest-contract.test.ts:259-267).
+//   - /api/ontology/schema/:className remains free-form (consumers read the
+//     full ResolvedClass — not part of the byte-equal fixture lock).
+//
 // Routes registered:
-//   GET /ontology/classes              — list resolved ontology classes
-//   GET /ontology/entity-types         — list distinct entityType strings
+//   GET /ontology/classes              — array of class name strings
+//   GET /ontology/entity-types         — array of {name, description, source}
 //   GET /ontology/schema/:className    — single class schema lookup
 //
 // All routes are read-only; no `if (!readOnly)` gate needed.
@@ -16,12 +26,15 @@
 
 import type { GraphKMStore } from '../../store/GraphKMStore.js';
 import type { OntologyRegistry } from '../../ontology/registry.js';
+import type { ResolvedClass } from '../../types/ontology.js';
 import type { RouteDescriptor, KmCoreRouterOptions } from '../router.js';
 
 interface RegistryLike {
-  classCatalog: ReadonlyMap<string, unknown>;
+  classCatalog: ReadonlyMap<string, ResolvedClass>;
   domains: ReadonlySet<string>;
   isValidClass?(name: string): boolean;
+  getClass?(name: string): ResolvedClass | undefined;
+  getAllClassNames?(): string[];
 }
 
 function getRegistry(
@@ -40,23 +53,25 @@ export function ontologyRoutes(
 ): RouteDescriptor[] {
   const routes: RouteDescriptor[] = [];
 
-  // GET /ontology/classes — list resolved ontology classes from the registry.
+  // GET /ontology/classes — array of class NAME STRINGS (OKM wire shape:
+  // rest-contract.test.ts:257 = `ApiSuccessEnvelope(z.array(z.string()))`).
   routes.push({
     method: 'get',
     path: '/ontology/classes',
     handler: async (_req, res) => {
       const registry = getRegistry(store, opts);
-      const classes = registry
-        ? Array.from(registry.classCatalog.values())
+      const names = registry
+        ? registry.getAllClassNames
+          ? registry.getAllClassNames()
+          : Array.from(registry.classCatalog.keys())
         : [];
-      res.json({ success: true, data: classes });
+      res.json({ success: true, data: names });
     },
   });
 
-  // GET /ontology/entity-types — distinct entityType strings drawn from the
-  // ontology registry (when present); otherwise an empty list. The endpoint
-  // exists for shape parity with OKM — A's typed views and B's REST tests
-  // expect a 200 + envelope, not a 404, when no registry is wired.
+  // GET /ontology/entity-types — array of {name, description, source} (OKM
+  // wire shape: rest-contract.test.ts:259-267). When no registry is wired,
+  // returns []. Matches OKM's `getOntologyEntityTypes` at routes.ts:1345-1366.
   routes.push({
     method: 'get',
     path: '/ontology/entity-types',
@@ -66,18 +81,25 @@ export function ontologyRoutes(
         res.json({ success: true, data: [] });
         return;
       }
-      const types = new Set<string>();
-      for (const [name] of registry.classCatalog.entries()) {
-        types.add(name);
-      }
-      res.json({
-        success: true,
-        data: Array.from(types).sort(),
+      const names = registry.getAllClassNames
+        ? registry.getAllClassNames()
+        : Array.from(registry.classCatalog.keys());
+      const details = names.map((name) => {
+        const cls = registry.getClass
+          ? registry.getClass(name)
+          : registry.classCatalog.get(name);
+        return {
+          name,
+          description: (cls?.description ?? '') as string,
+          source: (cls?.source ?? 'unknown') as string,
+        };
       });
+      res.json({ success: true, data: details });
     },
   });
 
-  // GET /ontology/schema/:className — single class lookup.
+  // GET /ontology/schema/:className — single class lookup. Returns the
+  // ResolvedClass (free-form — not part of the byte-equal fixture lock).
   routes.push({
     method: 'get',
     path: '/ontology/schema/:className',
@@ -88,7 +110,9 @@ export function ontologyRoutes(
         return;
       }
       const registry = getRegistry(store, opts);
-      const cls = registry?.classCatalog.get(className);
+      const cls = registry?.getClass
+        ? registry.getClass(className)
+        : registry?.classCatalog.get(className);
       if (!cls) {
         res.status(404).json({ success: false, error: 'Class not found' });
         return;
