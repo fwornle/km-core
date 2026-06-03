@@ -6,7 +6,7 @@
 //   S-1  Whole-directory atomic snapshot — every snapshot is one git commit
 //        over the entire `.data/exports/` directory.
 //   S-2  Hard reset on restore — restore checks out the tagged commit into the
-//        export dir. This function does NOT call process.exit and does NOT
+//        export dir. This function does NOT terminate the process and does NOT
 //        attempt in-process LevelDB re-hydration; the HTTP handler in Plan 06
 //        wraps the response with `restartRequired: true` and the operator (or
 //        a watchdog) issues the restart. See CONTEXT §S-2 revised and
@@ -224,7 +224,7 @@ export class SnapshotManager {
 
   /**
    * S-2: hard reset on the exports dir only. Returns control to the caller;
-   * does NOT wipe LevelDB, does NOT restart, does NOT call process.exit.
+   * does NOT wipe LevelDB, does NOT restart, does NOT terminate the process.
    *
    * Per CONTEXT S-2 (revised) and RESEARCH §Pitfall 4: the destructive parts
    * (LevelDB wipe, process restart) are the responsibility of the HTTP handler
