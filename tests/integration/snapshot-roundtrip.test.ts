@@ -39,8 +39,17 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { GraphKMStore } from '../../src/store/GraphKMStore.js';
+import type { ProvenanceStamp } from '../../src/types/entity.js';
 // RED IMPORT — Plan 44-04 deliverable.
 import { SnapshotManager } from '../../src/snapshots/SnapshotManager.js';
+
+// D-30: putEntity now requires explicit provenance; tests supply a fixed stamp.
+const PROV: ProvenanceStamp = {
+  provider: 'test',
+  model: 'test-model',
+  runId: 'phase-44-04-snapshot-roundtrip',
+  timestamp: '2026-06-03T12:00:00.000Z',
+};
 
 function gitInit(dir: string): void {
   execSync('git init -q', { cwd: dir });
@@ -86,16 +95,19 @@ describe('SnapshotManager — git-tag-backed snapshot/restore (S-1, S-2, S-4)', 
     const mgr = new SnapshotManager({ exportDir });
 
     // Seed a domain export so git has something to commit.
-    await store.putEntity({
-      id: 'entity/01TEST',
-      name: 'SeedEntity',
-      entityType: 'Component',
-      layer: 'evidence',
-      description: '',
-      metadata: {},
-      createdAt: '2026-06-03T12:00:00Z',
-      updatedAt: '2026-06-03T12:00:00Z',
-    } as Parameters<GraphKMStore['putEntity']>[0]);
+    await store.putEntity(
+      {
+        id: 'entity/01TEST',
+        name: 'SeedEntity',
+        entityType: 'Component',
+        layer: 'evidence',
+        description: '',
+        metadata: {},
+        createdAt: '2026-06-03T12:00:00Z',
+        updatedAt: '2026-06-03T12:00:00Z',
+      } as Parameters<GraphKMStore['putEntity']>[0],
+      { provenance: PROV, skipOntologyCheck: true },
+    );
     await store.exportJson();
 
     const entry = await mgr.createSnapshot('test-label');
@@ -116,16 +128,19 @@ describe('SnapshotManager — git-tag-backed snapshot/restore (S-1, S-2, S-4)', 
   test('listSnapshots returns entries with id, label, timestamp, commit_sha, domains_present', async () => {
     const mgr = new SnapshotManager({ exportDir });
 
-    await store.putEntity({
-      id: 'entity/01LIST',
-      name: 'L',
-      entityType: 'Component',
-      layer: 'evidence',
-      description: '',
-      metadata: {},
-      createdAt: '2026-06-03T12:00:00Z',
-      updatedAt: '2026-06-03T12:00:00Z',
-    } as Parameters<GraphKMStore['putEntity']>[0]);
+    await store.putEntity(
+      {
+        id: 'entity/01LIST',
+        name: 'L',
+        entityType: 'Component',
+        layer: 'evidence',
+        description: '',
+        metadata: {},
+        createdAt: '2026-06-03T12:00:00Z',
+        updatedAt: '2026-06-03T12:00:00Z',
+      } as Parameters<GraphKMStore['putEntity']>[0],
+      { provenance: PROV, skipOntologyCheck: true },
+    );
     await store.exportJson();
 
     const created = await mgr.createSnapshot('list-probe');
@@ -148,16 +163,19 @@ describe('SnapshotManager — git-tag-backed snapshot/restore (S-1, S-2, S-4)', 
     const mgr = new SnapshotManager({ exportDir });
 
     // Phase A: seed and snapshot.
-    await store.putEntity({
-      id: 'entity/01ROUND-A',
-      name: 'EntityA',
-      entityType: 'Component',
-      layer: 'evidence',
-      description: 'phase A',
-      metadata: {},
-      createdAt: '2026-06-03T12:00:00Z',
-      updatedAt: '2026-06-03T12:00:00Z',
-    } as Parameters<GraphKMStore['putEntity']>[0]);
+    await store.putEntity(
+      {
+        id: 'entity/01ROUND-A',
+        name: 'EntityA',
+        entityType: 'Component',
+        layer: 'evidence',
+        description: 'phase A',
+        metadata: {},
+        createdAt: '2026-06-03T12:00:00Z',
+        updatedAt: '2026-06-03T12:00:00Z',
+      } as Parameters<GraphKMStore['putEntity']>[0],
+      { provenance: PROV, skipOntologyCheck: true },
+    );
     await store.exportJson();
 
     // Snapshot the current exports.
@@ -172,20 +190,23 @@ describe('SnapshotManager — git-tag-backed snapshot/restore (S-1, S-2, S-4)', 
     }
 
     // Phase B: mutate (write a second entity, re-export → exports change).
-    await store.putEntity({
-      id: 'entity/01ROUND-B',
-      name: 'EntityB',
-      entityType: 'Pattern',
-      layer: 'pattern',
-      description: 'phase B (post-snapshot)',
-      metadata: {},
-      createdAt: '2026-06-03T12:01:00Z',
-      updatedAt: '2026-06-03T12:01:00Z',
-    } as Parameters<GraphKMStore['putEntity']>[0]);
+    await store.putEntity(
+      {
+        id: 'entity/01ROUND-B',
+        name: 'EntityB',
+        entityType: 'Pattern',
+        layer: 'pattern',
+        description: 'phase B (post-snapshot)',
+        metadata: {},
+        createdAt: '2026-06-03T12:01:00Z',
+        updatedAt: '2026-06-03T12:01:00Z',
+      } as Parameters<GraphKMStore['putEntity']>[0],
+      { provenance: PROV, skipOntologyCheck: true },
+    );
     await store.exportJson();
 
     // Restore: SnapshotManager reverts exportDir contents to the snapshot tag.
-    const restored = await mgr.restoreSnapshot(snap.id);
+    const restored = await mgr.restoreSnapshot(snap.id, { confirmDestructive: true });
     expect(restored.restored).toBe(true);
     expect(restored.id).toBe(snap.id);
 
@@ -220,16 +241,19 @@ describe('SnapshotManager — git-tag-backed snapshot/restore (S-1, S-2, S-4)', 
     );
     fs.chmodSync(hookPath, 0o755);
 
-    await store.putEntity({
-      id: 'entity/01HOOK',
-      name: 'H',
-      entityType: 'Component',
-      layer: 'evidence',
-      description: '',
-      metadata: {},
-      createdAt: '2026-06-03T12:00:00Z',
-      updatedAt: '2026-06-03T12:00:00Z',
-    } as Parameters<GraphKMStore['putEntity']>[0]);
+    await store.putEntity(
+      {
+        id: 'entity/01HOOK',
+        name: 'H',
+        entityType: 'Component',
+        layer: 'evidence',
+        description: '',
+        metadata: {},
+        createdAt: '2026-06-03T12:00:00Z',
+        updatedAt: '2026-06-03T12:00:00Z',
+      } as Parameters<GraphKMStore['putEntity']>[0],
+      { provenance: PROV, skipOntologyCheck: true },
+    );
     await store.exportJson();
 
     // If SnapshotManager DOES set OKB_SNAPSHOT=1, this succeeds.
