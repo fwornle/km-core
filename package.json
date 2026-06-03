@@ -13,6 +13,14 @@
       "types": "./dist/adapters/online/index.d.ts",
       "import": "./dist/adapters/online/index.js"
     },
+    "./api": {
+      "types": "./dist/api/index.d.ts",
+      "import": "./dist/api/index.js"
+    },
+    "./api/contracts": {
+      "types": "./dist/api/contracts.d.ts",
+      "import": "./dist/api/contracts.js"
+    },
     "./dedup": {
       "types": "./dist/dedup/index.d.ts",
       "import": "./dist/dedup/index.js"
@@ -32,6 +40,10 @@
     "./pipeline": {
       "types": "./dist/pipeline/index.d.ts",
       "import": "./dist/pipeline/index.js"
+    },
+    "./snapshots": {
+      "types": "./dist/snapshots/index.d.ts",
+      "import": "./dist/snapshots/index.js"
     }
   },
   "files": [
