@@ -256,6 +256,140 @@ describe('createKmCoreRouter — canonical /api/v1 surface', () => {
     }
   });
 
+  test('GET /api/v1/export propagates edge source/target to wire (44-09 Drift #2)', async () => {
+    // 44-09 Drift #2 regression lock: graphology's export() puts source/target
+    // at the TOP LEVEL of each edge object (not inside e.attributes). The
+    // export handler must propagate them via from/to so the wire shape carries
+    // populated source/target — empty strings or missing keys are the bug.
+    const e1 = await request(app).post('/api/v1/entities').send({
+      name: 'ExportA',
+      entityType: 'Component',
+      ontologyClass: 'Component',
+      layer: 'evidence',
+      description: 'a',
+      metadata: {},
+    });
+    const e2 = await request(app).post('/api/v1/entities').send({
+      name: 'ExportB',
+      entityType: 'Component',
+      ontologyClass: 'Component',
+      layer: 'evidence',
+      description: 'b',
+      metadata: {},
+    });
+    await request(app).post('/api/v1/relations').send({
+      from: e1.body.data.id,
+      to: e2.body.data.id,
+      relationType: 'derivedFrom',
+      metadata: {},
+    });
+
+    const exp = await request(app).get('/api/v1/export');
+    expect(exp.status).toBe(200);
+    expect(exp.body.success).toBe(true);
+    expect(Array.isArray(exp.body.data.edges)).toBe(true);
+    expect(exp.body.data.edges.length).toBeGreaterThanOrEqual(1);
+    for (const edge of exp.body.data.edges) {
+      // Drift #2 regression: source + target MUST be populated, non-empty strings.
+      expect(typeof edge.source).toBe('string');
+      expect(edge.source.length).toBeGreaterThan(0);
+      expect(typeof edge.target).toBe('string');
+      expect(edge.target.length).toBeGreaterThan(0);
+      // Attributes envelope still present (relationToWire output).
+      expect(edge.attributes).toBeDefined();
+      expect(typeof edge.attributes.type).toBe('string');
+    }
+    // At least one edge should reference our seeded endpoints.
+    const found = exp.body.data.edges.find(
+      (e: { source: string; target: string }) =>
+        e.source === e1.body.data.id && e.target === e2.body.data.id,
+    );
+    expect(found).toBeDefined();
+  });
+
+  test('GET /api/v1/graph/connectivity populates components array (44-09 Drift #3)', async () => {
+    // 44-09 Drift #3 regression lock: per-component BFS must accumulate nodeIds
+    // and build {index, isMainComponent, nodeIds, size} records. Empty
+    // components[] is the bug we just fixed.
+    //
+    // Seed two connected entities + one orphan → expect 2 components.
+    const e1 = await request(app).post('/api/v1/entities').send({
+      name: 'ConnA',
+      entityType: 'Component',
+      ontologyClass: 'Component',
+      layer: 'evidence',
+      description: 'a',
+      metadata: {},
+    });
+    const e2 = await request(app).post('/api/v1/entities').send({
+      name: 'ConnB',
+      entityType: 'Component',
+      ontologyClass: 'Component',
+      layer: 'evidence',
+      description: 'b',
+      metadata: {},
+    });
+    await request(app).post('/api/v1/entities').send({
+      name: 'Orphan',
+      entityType: 'Component',
+      ontologyClass: 'Component',
+      layer: 'evidence',
+      description: 'lonely',
+      metadata: {},
+    });
+    await request(app).post('/api/v1/relations').send({
+      from: e1.body.data.id,
+      to: e2.body.data.id,
+      relationType: 'derivedFrom',
+      metadata: {},
+    });
+
+    const res = await request(app).get('/api/v1/graph/connectivity');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    const data = res.body.data;
+
+    // componentCount + components.length agree.
+    expect(typeof data.componentCount).toBe('number');
+    expect(Array.isArray(data.components)).toBe(true);
+    expect(data.components.length).toBe(data.componentCount);
+    expect(data.components.length).toBeGreaterThanOrEqual(2);
+
+    // Each component carries the full record shape.
+    for (const c of data.components) {
+      expect(typeof c.index).toBe('number');
+      expect(typeof c.size).toBe('number');
+      expect(typeof c.isMainComponent).toBe('boolean');
+      expect(Array.isArray(c.nodeIds)).toBe(true);
+      expect(c.nodeIds.length).toBe(c.size);
+    }
+
+    // Exactly one component is flagged main.
+    const mains = data.components.filter(
+      (c: { isMainComponent: boolean }) => c.isMainComponent,
+    );
+    expect(mains.length).toBe(1);
+    // Main component is the largest.
+    const maxSize = Math.max(
+      ...data.components.map((c: { size: number }) => c.size),
+    );
+    expect(mains[0].size).toBe(maxSize);
+
+    // Indices are 0..N-1 in encounter order.
+    for (let i = 0; i < data.components.length; i++) {
+      expect(data.components[i].index).toBe(i);
+    }
+
+    // trueOrphans is populated (we seeded one).
+    expect(Array.isArray(data.trueOrphans)).toBe(true);
+    expect(data.trueOrphans.length).toBeGreaterThanOrEqual(1);
+    for (const o of data.trueOrphans) {
+      expect(typeof o.nodeId).toBe('string');
+      expect(o.nodeId.length).toBeGreaterThan(0);
+      expect(o.degree).toBe(0);
+    }
+  });
+
   test('createKmCoreRouter with { readOnly: true } rejects POST/PUT/DELETE', async () => {
     // Spin a SECOND app with readOnly:true to isolate from the beforeEach mount.
     const roApp = express();
