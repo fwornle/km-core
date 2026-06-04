@@ -126,8 +126,9 @@ export interface GraphKMStoreOptions {
  * with LevelDB persistence and per-domain JSON export, exposing the
  * D-14 repository API (`putEntity`, `getEntity`, `deleteEntity`,
  * `findByOntologyClass`, `countByOntologyClass`, `lastModifiedByClass`,
- * `findByLegacyId`, `addRelation`, `findRelations`, `batch`, `iterate`,
- * `exportJson`, `mergeAttributes`, `restore`, `open`, `close`).
+ * `findByLegacyId`, `findByContentHash`, `findRecentByAgent`,
+ * `addRelation`, `findRelations`, `batch`, `iterate`, `exportJson`,
+ * `mergeAttributes`, `restore`, `open`, `close`).
  *
  * Emits typed events (D-16) on mutation: `entity:put`, `entity:delete`,
  * `relation:added`, `relation:removed`. Consumers can wire these to a
@@ -689,6 +690,137 @@ export class GraphKMStore extends EventEmitter {
       return entity;
     }
     return undefined;
+  }
+
+  /**
+   * Phase 44 Plan 13 — content-hash dedup lookup for ObservationWriter and
+   * future km-core consumers that need the (agent, content_hash) → Entity
+   * resolution path.
+   *
+   * Surfaces the inverse of legacy-ingest.ts:262-274, which stores
+   * `metadata.agent = row.agent` and `metadata.content_hash = row.content_hash`
+   * (snake_case — the SQLite column names are preserved verbatim under
+   * metadata so the writer + migration script + obs-api typed views share
+   * one field map). Both fields are checked for equality with the caller-
+   * supplied (agent, contentHash) pair; the per-class scan is bounded by
+   * `opts.ontologyClass` (default `'Observation'`) so the candidate pool
+   * stays at ~3.9k entries in current production (sub-millisecond at this
+   * scale).
+   *
+   * Cost model:
+   *   - O(N_class) — scans every entity whose `entityType === cls ||
+   *     ontologyClass === cls` and predicates on `metadata.agent` +
+   *     `metadata.content_hash`. No secondary index over (agent,
+   *     contentHash) exists; threat T-44-13-01 mitigation is the
+   *     per-class bound plus a perf assertion in Plan 44-13's integration
+   *     test (avg <2ms over 100 calls at 1k pre-seeded observations).
+   *
+   * Returns the matched entities array (caller picks `[0]` or null). D-34
+   * active-only filter applies by default. Empty match returns `[]`, NOT
+   * undefined — caller can `.length === 0` check without truthiness traps.
+   *
+   * Used by:
+   *   - `src/live-logging/ObservationWriter.js::_findExistingByContentHash`
+   *     (Plan 44-13 Task 2) — replaces the previous SQLite
+   *     `SELECT id, summary, metadata FROM observations WHERE agent=? AND
+   *     content_hash=? LIMIT 1` lookup.
+   */
+  async findByContentHash(
+    agent: string,
+    contentHash: string,
+    opts?: { ontologyClass?: string; includeSuperseded?: boolean },
+  ): Promise<Entity[]> {
+    const cls = opts?.ontologyClass ?? 'Observation';
+    const includeSuperseded = opts?.includeSuperseded === true;
+    const nowMs = Date.now();
+    const matches: Entity[] = [];
+    for (const nodeId of this.graph.nodes()) {
+      const entity = this.graph.getNodeAttributes(nodeId) as Entity;
+      if (entity.entityType !== cls && entity.ontologyClass !== cls) continue;
+      const meta = entity.metadata as
+        | { agent?: string | null; content_hash?: string | null }
+        | undefined;
+      if (!meta) continue;
+      if (meta.agent !== agent) continue;
+      if (meta.content_hash !== contentHash) continue;
+      if (!includeSuperseded && !this.isActive(entity, nowMs)) continue;
+      matches.push(entity);
+    }
+    return matches;
+  }
+
+  /**
+   * Phase 44 Plan 13 — recent-by-agent time-windowed lookup for
+   * ObservationWriter semantic dedup and future km-core consumers that
+   * need the (agent, sinceISO, limit) → Entity[] resolution path.
+   *
+   * Returns up to `limit` entities of class `opts.ontologyClass` (default
+   * `'Observation'`) whose `metadata.agent === agent` AND
+   * `metadata.createdAt > sinceISO`, sorted by `metadata.createdAt` DESC.
+   *
+   * The timestamp source is `metadata.createdAt` (stamped by
+   * legacy-ingest.ts:273 from `row.created_at`) rather than top-level
+   * `entity.createdAt` because the legacy-ingest adapter promotes both
+   * fields to the same value — keeping the comparison on the metadata
+   * path avoids ambiguity when callers replay via `putEntity` and the
+   * top-level `entity.createdAt` gets overwritten by Phase 39 D-31
+   * stamping (validFrom default).
+   *
+   * ISO-8601 strings compare lexicographically (sort identical to date
+   * order), so the implementation is a string-comparison scan + array
+   * sort without Date construction.
+   *
+   * Cost model:
+   *   - O(N_class) iteration + O(K log K) sort where K is the unbounded
+   *     count of matches before truncation. In production at ~3.9k
+   *     observations with the default 4-hour window, K << N_class and
+   *     the overall cost stays sub-millisecond.
+   *
+   * D-34 active-only filter applies by default. Empty match returns `[]`.
+   *
+   * Used by:
+   *   - `src/live-logging/ObservationWriter.js::_isSemanticallyDuplicate`
+   *     (Plan 44-13 Task 2) — replaces the previous SQLite
+   *     `SELECT summary FROM observations WHERE agent=? AND
+   *     created_at>datetime('now','-4 hours') ORDER BY created_at DESC
+   *     LIMIT 50` lookup.
+   */
+  async findRecentByAgent(
+    agent: string,
+    sinceISO: string,
+    limit: number,
+    opts?: { ontologyClass?: string; includeSuperseded?: boolean },
+  ): Promise<Entity[]> {
+    const cls = opts?.ontologyClass ?? 'Observation';
+    const includeSuperseded = opts?.includeSuperseded === true;
+    const nowMs = Date.now();
+    const matches: Entity[] = [];
+    for (const nodeId of this.graph.nodes()) {
+      const entity = this.graph.getNodeAttributes(nodeId) as Entity;
+      if (entity.entityType !== cls && entity.ontologyClass !== cls) continue;
+      const meta = entity.metadata as
+        | { agent?: string | null; createdAt?: string | null }
+        | undefined;
+      if (!meta) continue;
+      if (meta.agent !== agent) continue;
+      const ts = meta.createdAt;
+      if (typeof ts !== 'string' || ts.length === 0) continue;
+      if (ts <= sinceISO) continue;
+      if (!includeSuperseded && !this.isActive(entity, nowMs)) continue;
+      matches.push(entity);
+    }
+    // Sort by metadata.createdAt DESC (ISO-8601 lexicographic compare).
+    matches.sort((a, b) => {
+      const ta = (a.metadata as { createdAt?: string }).createdAt ?? '';
+      const tb = (b.metadata as { createdAt?: string }).createdAt ?? '';
+      if (ta < tb) return 1;
+      if (ta > tb) return -1;
+      return 0;
+    });
+    if (limit > 0 && matches.length > limit) {
+      matches.length = limit;
+    }
+    return matches;
   }
 
   /**

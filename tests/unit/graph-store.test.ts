@@ -1072,3 +1072,194 @@ describe('countByOntologyClass / lastModifiedByClass / findByLegacyId (Phase 44 
     expect(wrongSystem).toBeUndefined();
   });
 });
+
+// Phase 44 Plan 13 — APPENDED tests for `findByContentHash` and
+// `findRecentByAgent`. The two helpers back ObservationWriter's dedup +
+// semantic-dup helpers in the Plan 13 cutover (drop `this.db`). Sibling
+// describe block — do NOT modify the existing blocks above.
+describe('findByContentHash / findRecentByAgent (Phase 44 Plan 13)', () => {
+  let ctx: Ctx;
+
+  function mkProvenance(suffix: string): ProvenanceStamp {
+    return {
+      provider: 'test',
+      model: 'test-model',
+      runId: `run-${suffix}`,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // Helper: seed an Observation-shaped entity matching the legacy-ingest.ts
+  // field map (metadata.agent + metadata.content_hash + metadata.createdAt
+  // snake-case). Uses the trusted path so we can stamp legacyId verbatim.
+  async function seedObservation(
+    name: string,
+    agent: string,
+    contentHash: string,
+    createdAt: string,
+  ): Promise<void> {
+    await ctx.store.putEntity(
+      {
+        name,
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        layer: 'evidence',
+        description: name,
+        createdAt,
+        updatedAt: createdAt,
+        validFrom: createdAt,
+        metadata: {
+          agent,
+          content_hash: contentHash,
+          createdAt,
+          summary: name,
+        },
+        legacyId: { system: 'A', id: `legacy-${name}` },
+        createdBy: mkProvenance(name),
+      } as unknown as Parameters<typeof ctx.store.putEntity>[0],
+      { skipOntologyCheck: true },
+    );
+  }
+
+  beforeEach(async () => {
+    ctx = makeStore();
+    await ctx.store.open();
+  });
+
+  afterEach(async () => {
+    await ctx.store.close();
+    fs.rmSync(ctx.tmpdir, { recursive: true, force: true });
+  });
+
+  // ── findByContentHash ──────────────────────────────────────────────────
+
+  test('findByContentHash returns the matching entity for (agent, contentHash)', async () => {
+    await seedObservation('o1', 'claude', 'hash-A', '2026-06-04T10:00:00Z');
+    await seedObservation('o2', 'claude', 'hash-B', '2026-06-04T10:05:00Z');
+    await seedObservation('o3', 'opencode', 'hash-A', '2026-06-04T10:10:00Z');
+    await seedObservation('o4', 'copilot', 'hash-C', '2026-06-04T10:15:00Z');
+    await seedObservation('o5', 'claude', 'hash-A', '2026-06-04T11:00:00Z');
+
+    const matches = await ctx.store.findByContentHash('claude', 'hash-A');
+    expect(matches.length).toBe(2);
+    const names = matches.map((e) => e.name).sort();
+    expect(names).toEqual(['o1', 'o5']);
+  });
+
+  test('findByContentHash returns [] when agent does not match', async () => {
+    await seedObservation('o1', 'claude', 'hash-A', '2026-06-04T10:00:00Z');
+    const matches = await ctx.store.findByContentHash('opencode', 'hash-A');
+    expect(matches).toEqual([]);
+  });
+
+  test('findByContentHash returns [] when contentHash does not match', async () => {
+    await seedObservation('o1', 'claude', 'hash-A', '2026-06-04T10:00:00Z');
+    const matches = await ctx.store.findByContentHash('claude', 'hash-Z');
+    expect(matches).toEqual([]);
+  });
+
+  test('findByContentHash respects ontologyClass override', async () => {
+    // Seed one Observation and one Digest with the SAME (agent, content_hash)
+    // — the Observation-default scan must NOT cross-match the Digest.
+    await seedObservation('obs', 'claude', 'hash-X', '2026-06-04T10:00:00Z');
+    await ctx.store.putEntity(
+      {
+        name: 'dig',
+        entityType: 'Digest',
+        ontologyClass: 'Digest',
+        layer: 'pattern',
+        description: 'a digest',
+        createdAt: '2026-06-04T10:00:00Z',
+        metadata: { agent: 'claude', content_hash: 'hash-X' },
+        createdBy: mkProvenance('dig'),
+      } as unknown as Parameters<typeof ctx.store.putEntity>[0],
+      { skipOntologyCheck: true },
+    );
+    const obs = await ctx.store.findByContentHash('claude', 'hash-X');
+    expect(obs.length).toBe(1);
+    expect(obs[0].name).toBe('obs');
+    const digs = await ctx.store.findByContentHash('claude', 'hash-X', {
+      ontologyClass: 'Digest',
+    });
+    expect(digs.length).toBe(1);
+    expect(digs[0].name).toBe('dig');
+  });
+
+  // ── findRecentByAgent ──────────────────────────────────────────────────
+
+  test('findRecentByAgent returns entities newer than sinceISO, sorted DESC by metadata.createdAt', async () => {
+    await seedObservation('oldest', 'claude', 'h1', '2026-06-04T08:00:00Z');
+    await seedObservation('mid', 'claude', 'h2', '2026-06-04T10:00:00Z');
+    await seedObservation('newest', 'claude', 'h3', '2026-06-04T12:00:00Z');
+    await seedObservation('newer-different-agent', 'opencode', 'h4', '2026-06-04T13:00:00Z');
+
+    const since = '2026-06-04T09:00:00Z';
+    const matches = await ctx.store.findRecentByAgent('claude', since, 10);
+    expect(matches.length).toBe(2);
+    // Sorted DESC — newest first.
+    expect(matches[0].name).toBe('newest');
+    expect(matches[1].name).toBe('mid');
+  });
+
+  test('findRecentByAgent truncates to limit', async () => {
+    await seedObservation('o1', 'claude', 'h1', '2026-06-04T10:00:00Z');
+    await seedObservation('o2', 'claude', 'h2', '2026-06-04T10:05:00Z');
+    await seedObservation('o3', 'claude', 'h3', '2026-06-04T10:10:00Z');
+    await seedObservation('o4', 'claude', 'h4', '2026-06-04T10:15:00Z');
+    await seedObservation('o5', 'claude', 'h5', '2026-06-04T10:20:00Z');
+
+    const since = '2026-06-04T09:00:00Z';
+    const matches = await ctx.store.findRecentByAgent('claude', since, 3);
+    expect(matches.length).toBe(3);
+    expect(matches.map((e) => e.name)).toEqual(['o5', 'o4', 'o3']);
+  });
+
+  test('findRecentByAgent returns [] when agent does not match', async () => {
+    await seedObservation('o1', 'claude', 'h1', '2026-06-04T10:00:00Z');
+    const since = '2026-06-04T00:00:00Z';
+    const matches = await ctx.store.findRecentByAgent('opencode', since, 10);
+    expect(matches).toEqual([]);
+  });
+
+  test('findRecentByAgent excludes entities at-or-before sinceISO', async () => {
+    // Use ISO-8601 strings of consistent precision so lexicographic compare
+    // matches chronological compare (mixing ".001Z" with "Z" suffixes breaks
+    // lexicographic ordering — '.' < 'Z' in ASCII).
+    await seedObservation('exactly-at', 'claude', 'h1', '2026-06-04T10:00:00.000Z');
+    await seedObservation('one-second-after', 'claude', 'h2', '2026-06-04T10:00:01.000Z');
+
+    // Strict > comparison: an entity stamped exactly at sinceISO is excluded.
+    const matches = await ctx.store.findRecentByAgent(
+      'claude',
+      '2026-06-04T10:00:00.000Z',
+      10,
+    );
+    expect(matches.length).toBe(1);
+    expect(matches[0].name).toBe('one-second-after');
+  });
+
+  test('findRecentByAgent respects ontologyClass override', async () => {
+    await seedObservation('obs', 'claude', 'h1', '2026-06-04T10:00:00Z');
+    await ctx.store.putEntity(
+      {
+        name: 'dig',
+        entityType: 'Digest',
+        ontologyClass: 'Digest',
+        layer: 'pattern',
+        description: 'a digest',
+        createdAt: '2026-06-04T11:00:00Z',
+        metadata: { agent: 'claude', createdAt: '2026-06-04T11:00:00Z' },
+        createdBy: mkProvenance('dig'),
+      } as unknown as Parameters<typeof ctx.store.putEntity>[0],
+      { skipOntologyCheck: true },
+    );
+    const obs = await ctx.store.findRecentByAgent('claude', '2026-06-04T00:00:00Z', 10);
+    expect(obs.length).toBe(1);
+    expect(obs[0].name).toBe('obs');
+    const digs = await ctx.store.findRecentByAgent('claude', '2026-06-04T00:00:00Z', 10, {
+      ontologyClass: 'Digest',
+    });
+    expect(digs.length).toBe(1);
+    expect(digs[0].name).toBe('dig');
+  });
+});
