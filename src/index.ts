@@ -250,3 +250,29 @@ export type {
   LegacyDigest,
   LegacyInsight,
 } from './adapters/observation-view.js';
+
+// Phase 44 Plan 12 (A-1 architectural close-out): inverse-direction
+// adapter. Mirror of observation-view.ts above — the same field-map walked
+// the other way. Used by:
+//   * src/live-logging/ObservationWriter.js (live write-path cutover, R-4)
+//   * scripts/migrate-sqlite-to-kmcore.mjs (one-shot SQLite → km-core
+//     migration; previously duplicated this logic inline at lines 170-266).
+// Both consumers share one source of truth so the legacyId placement,
+// Pitfall 3 (BOTH entityType + ontologyClass), and Phase 39 D-30
+// provenance stamp are encoded once.
+//
+// Sub-paths:
+//   import { legacyObservationToEntity, ... } from '@fwornle/km-core/adapters/legacy-ingest';
+//   import { legacyObservationToEntity, ... } from '@fwornle/km-core/adapters';
+// Or via the root barrel (this file).
+export {
+  legacyObservationToEntity,
+  legacyDigestToEntity,
+  legacyInsightToEntity,
+} from './adapters/legacy-ingest.js';
+export type {
+  LegacyObservationRow,
+  LegacyDigestRow,
+  LegacyInsightRow,
+  LegacyIngestOptions,
+} from './adapters/legacy-ingest.js';

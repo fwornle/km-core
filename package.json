@@ -9,6 +9,18 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./adapters": {
+      "types": "./dist/adapters/index.d.ts",
+      "import": "./dist/adapters/index.js"
+    },
+    "./adapters/legacy-ingest": {
+      "types": "./dist/adapters/legacy-ingest.d.ts",
+      "import": "./dist/adapters/legacy-ingest.js"
+    },
+    "./adapters/observation-view": {
+      "types": "./dist/adapters/observation-view.d.ts",
+      "import": "./dist/adapters/observation-view.js"
+    },
     "./adapters/online": {
       "types": "./dist/adapters/online/index.d.ts",
       "import": "./dist/adapters/online/index.js"
