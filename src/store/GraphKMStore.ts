@@ -125,9 +125,9 @@ export interface GraphKMStoreOptions {
  * GraphKMStore — composition class wrapping Graphology in-memory graph
  * with LevelDB persistence and per-domain JSON export, exposing the
  * D-14 repository API (`putEntity`, `getEntity`, `deleteEntity`,
- * `findByOntologyClass`, `addRelation`, `findRelations`, `batch`,
- * `iterate`, `exportJson`, `mergeAttributes`, `restore`, `open`,
- * `close`).
+ * `findByOntologyClass`, `countByOntologyClass`, `lastModifiedByClass`,
+ * `findByLegacyId`, `addRelation`, `findRelations`, `batch`, `iterate`,
+ * `exportJson`, `mergeAttributes`, `restore`, `open`, `close`).
  *
  * Emits typed events (D-16) on mutation: `entity:put`, `entity:delete`,
  * `relation:added`, `relation:removed`. Consumers can wire these to a
@@ -579,6 +579,116 @@ export class GraphKMStore extends EventEmitter {
       matches.push(entity);
     }
     return matches;
+  }
+
+  /**
+   * Phase 44 Plan 14 (T-44-14-01) — efficient COUNT helper for dashboard
+   * top-line counters at :3032. Iterates the ontology-class filter (same
+   * OR-gate as `findByOntologyClass`: entityType === cls || ontologyClass
+   * === cls) and counts matches WITHOUT materialising the entity array.
+   *
+   * Cost model:
+   *   - Without `opts.predicate`: O(N) over all nodes, no array allocation.
+   *     (Note: a true O(1) is not achievable without an index over the
+   *     ontology-class attribute; graphology v0.26 has no attribute index.
+   *     N is bounded by total node count which is currently ~4k on this
+   *     machine — the O(N) scan completes in <5ms.)
+   *   - With `opts.predicate`: O(N_class) — predicate runs on each match.
+   *
+   * Applies D-34 active-only filtering by default (matching
+   * `findByOntologyClass`). Empty-class case returns 0 (does NOT throw).
+   *
+   * Used by `GET /api/consolidation/status` (Plan 44-14 Task 2(g)) to
+   * compute `totalObs` / `totalDigests` / `totalInsights` without
+   * dragging the entity array into the response handler's hot path.
+   */
+  async countByOntologyClass(
+    cls: string,
+    opts?: {
+      includeSuperseded?: boolean;
+      predicate?: (entity: Entity) => boolean;
+    },
+  ): Promise<number> {
+    const includeSuperseded = opts?.includeSuperseded === true;
+    const predicate = opts?.predicate;
+    const nowMs = Date.now();
+    let count = 0;
+    for (const nodeId of this.graph.nodes()) {
+      const entity = this.graph.getNodeAttributes(nodeId) as Entity;
+      if (entity.entityType !== cls && entity.ontologyClass !== cls) continue;
+      if (!includeSuperseded && !this.isActive(entity, nowMs)) continue;
+      if (predicate !== undefined && !predicate(entity)) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
+   * Phase 44 Plan 14 (T-44-14-06) — staleness clock helper for the
+   * dashboard real-time-staleness badge ([📚] in the health-coordinator
+   * statusline). Returns the ISO-8601 string of the maximum `createdAt`
+   * across all entities matching `cls`, or `null` when the class is
+   * empty.
+   *
+   * ISO-8601 strings compare lexicographically (sort identical to date
+   * order), so the implementation is a simple max-scan without Date
+   * construction. D-34 active-only filtering applies by default.
+   *
+   * Cost: O(N) over all nodes (no attribute index — see
+   * `countByOntologyClass` cost-model note). Caller (obs-api) wraps this
+   * with a 5s TTL cache (T-44-14-06 mitigation) and invalidates on
+   * writer publish so a fresh ETM observation flows through within ~5s.
+   */
+  async lastModifiedByClass(
+    cls: string,
+    opts?: { includeSuperseded?: boolean },
+  ): Promise<string | null> {
+    const includeSuperseded = opts?.includeSuperseded === true;
+    const nowMs = Date.now();
+    let max: string | null = null;
+    for (const nodeId of this.graph.nodes()) {
+      const entity = this.graph.getNodeAttributes(nodeId) as Entity;
+      if (entity.entityType !== cls && entity.ontologyClass !== cls) continue;
+      if (!includeSuperseded && !this.isActive(entity, nowMs)) continue;
+      const ts = entity.createdAt;
+      if (typeof ts !== 'string' || ts.length === 0) continue;
+      if (max === null || ts > max) {
+        max = ts;
+      }
+    }
+    return max;
+  }
+
+  /**
+   * Phase 44 Plan 14 — resolve an entity by its legacy-system row id.
+   * Required by `POST /api/insights/:id/resynthesize` (Task 2(g)) and any
+   * other obs-api endpoint that needs to reach the km-core entity whose
+   * `legacyId.system === system` AND `legacyId.id === id` (the SQLite
+   * primary key encoded by `legacy-ingest.ts`).
+   *
+   * O(N) scan over all nodes — there is no index over `legacyId`.
+   * Returns the first match (legacyId is expected to be unique per
+   * (system, id) pair; if duplicates exist that is a data-integrity bug
+   * not handled here). Returns `undefined` when no match exists.
+   *
+   * D-34 active-only filter applies by default. Pass `includeSuperseded:
+   * true` to also consider entities whose `validUntil` has elapsed
+   * (useful for post-hoc resolution / history walks).
+   */
+  async findByLegacyId(
+    selector: { system: string; id: string },
+    opts?: { includeSuperseded?: boolean },
+  ): Promise<Entity | undefined> {
+    const includeSuperseded = opts?.includeSuperseded === true;
+    const nowMs = Date.now();
+    for (const nodeId of this.graph.nodes()) {
+      const entity = this.graph.getNodeAttributes(nodeId) as Entity;
+      const lid = entity.legacyId;
+      if (!lid || lid.system !== selector.system || lid.id !== selector.id) continue;
+      if (!includeSuperseded && !this.isActive(entity, nowMs)) continue;
+      return entity;
+    }
+    return undefined;
   }
 
   /**

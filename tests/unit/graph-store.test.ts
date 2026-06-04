@@ -840,3 +840,235 @@ describe('getDegree (Phase 41 Plan 03)', () => {
     await expect(ctx.store.getDegree(missing)).resolves.toBe(0);
   });
 });
+
+// Phase 44 Plan 14 — APPENDED tests for `countByOntologyClass`,
+// `lastModifiedByClass`, and `findByLegacyId`. The three helpers back
+// `GET /api/consolidation/status` (top-line COUNTs + staleness clock) and
+// `POST /api/insights/:id/resynthesize` (legacyId lookup) in obs-api after
+// the legacy-endpoint cutover. Sibling describe block — do NOT modify the
+// existing blocks above.
+describe('countByOntologyClass / lastModifiedByClass / findByLegacyId (Phase 44 Plan 14)', () => {
+  let ctx: Ctx;
+
+  function mkProvenance(suffix: string): ProvenanceStamp {
+    return {
+      provider: 'test',
+      model: 'test-model',
+      runId: `run-${suffix}`,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  beforeEach(async () => {
+    ctx = makeStore();
+    await ctx.store.open();
+  });
+
+  afterEach(async () => {
+    await ctx.store.close();
+    fs.rmSync(ctx.tmpdir, { recursive: true, force: true });
+  });
+
+  test('countByOntologyClass returns 0 for an empty class without throwing', async () => {
+    // T-44-14-01 mitigation: dashboard COUNTs must NOT throw on an empty
+    // store. Pre-Plan-14 the SQLite-backed handler returned 0 implicitly
+    // via `SELECT COUNT(*) ... FROM observations` returning {cnt: 0}; the
+    // km-core replacement must preserve that contract.
+    const obs = await ctx.store.countByOntologyClass('Observation');
+    const dig = await ctx.store.countByOntologyClass('Digest');
+    const ins = await ctx.store.countByOntologyClass('Insight');
+    expect(obs).toBe(0);
+    expect(dig).toBe(0);
+    expect(ins).toBe(0);
+  });
+
+  test('countByOntologyClass counts only entities matching the class', async () => {
+    // Seed 3 Observation + 2 Digest + 1 Insight + 1 Component (decoy).
+    for (const n of ['o1', 'o2', 'o3']) {
+      await ctx.store.putEntity(
+        { name: n, entityType: 'Observation', ontologyClass: 'Observation' },
+        { provenance: mkProvenance(n) },
+      );
+    }
+    for (const n of ['d1', 'd2']) {
+      await ctx.store.putEntity(
+        { name: n, entityType: 'Digest', ontologyClass: 'Digest' },
+        { provenance: mkProvenance(n) },
+      );
+    }
+    await ctx.store.putEntity(
+      { name: 'i1', entityType: 'Insight', ontologyClass: 'Insight' },
+      { provenance: mkProvenance('i1') },
+    );
+    await ctx.store.putEntity(
+      { name: 'c1', entityType: 'Component', ontologyClass: 'Component' },
+      { provenance: mkProvenance('c1') },
+    );
+
+    expect(await ctx.store.countByOntologyClass('Observation')).toBe(3);
+    expect(await ctx.store.countByOntologyClass('Digest')).toBe(2);
+    expect(await ctx.store.countByOntologyClass('Insight')).toBe(1);
+    // Class with no matches still returns a number (0), not undefined.
+    expect(await ctx.store.countByOntologyClass('Pattern')).toBe(0);
+  });
+
+  test('countByOntologyClass with predicate filters per-entity', async () => {
+    await ctx.store.putEntity(
+      {
+        name: 'obs-coding',
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        metadata: { project: 'coding' },
+      },
+      { provenance: mkProvenance('1') },
+    );
+    await ctx.store.putEntity(
+      {
+        name: 'obs-coding2',
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        metadata: { project: 'coding' },
+      },
+      { provenance: mkProvenance('2') },
+    );
+    await ctx.store.putEntity(
+      {
+        name: 'obs-other',
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        metadata: { project: 'rapid-automations' },
+      },
+      { provenance: mkProvenance('3') },
+    );
+    const total = await ctx.store.countByOntologyClass('Observation');
+    const coding = await ctx.store.countByOntologyClass('Observation', {
+      predicate: (e) => (e.metadata as { project?: string } | undefined)?.project === 'coding',
+    });
+    expect(total).toBe(3);
+    expect(coding).toBe(2);
+  });
+
+  test('lastModifiedByClass returns null for an empty class', async () => {
+    // T-44-14-06 mitigation: staleness clock must NOT throw and must NOT
+    // return undefined on an empty class. The dashboard COUNT path
+    // distinguishes "no data ever" (null) from "data exists" (ISO string).
+    const ts = await ctx.store.lastModifiedByClass('Observation');
+    expect(ts).toBeNull();
+  });
+
+  test('lastModifiedByClass returns the max createdAt across the class', async () => {
+    // Three observations with explicit ISO timestamps. ISO-8601 strings
+    // compare lexicographically identical to chronological order, so a
+    // simple string-max suffices in the implementation.
+    await ctx.store.putEntity(
+      {
+        name: 'old',
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      { provenance: mkProvenance('old') },
+    );
+    await ctx.store.putEntity(
+      {
+        name: 'newest',
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        createdAt: '2026-06-04T12:00:00Z',
+      },
+      { provenance: mkProvenance('newest') },
+    );
+    await ctx.store.putEntity(
+      {
+        name: 'middle',
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        createdAt: '2026-03-15T08:00:00Z',
+      },
+      { provenance: mkProvenance('middle') },
+    );
+    const ts = await ctx.store.lastModifiedByClass('Observation');
+    expect(ts).toBe('2026-06-04T12:00:00Z');
+  });
+
+  test('lastModifiedByClass ignores entities of other classes', async () => {
+    await ctx.store.putEntity(
+      {
+        name: 'obs',
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+      { provenance: mkProvenance('obs') },
+    );
+    // A Digest with a LATER timestamp must not influence the Observation
+    // staleness clock — the dashboard's three timestamps are per-class.
+    await ctx.store.putEntity(
+      {
+        name: 'dig',
+        entityType: 'Digest',
+        ontologyClass: 'Digest',
+        createdAt: '2026-12-31T23:59:59Z',
+      },
+      { provenance: mkProvenance('dig') },
+    );
+    const obsTs = await ctx.store.lastModifiedByClass('Observation');
+    const digTs = await ctx.store.lastModifiedByClass('Digest');
+    expect(obsTs).toBe('2026-01-01T00:00:00Z');
+    expect(digTs).toBe('2026-12-31T23:59:59Z');
+  });
+
+  test('findByLegacyId returns the matching entity', async () => {
+    // Two observations stamped with system:'A' legacyIds via the trusted
+    // path (mirrors how legacy-ingest.ts shapes ObservationWriter output).
+    const ePartial = {
+      entityType: 'Observation',
+      ontologyClass: 'Observation' as string,
+      layer: 'evidence' as const,
+      description: '',
+      createdAt: '2026-06-04T10:00:00Z',
+      updatedAt: '2026-06-04T10:00:00Z',
+      validFrom: '2026-06-04T10:00:00Z',
+      createdBy: mkProvenance('seed'),
+    };
+    await ctx.store.putEntity(
+      {
+        ...ePartial,
+        name: 'first',
+        legacyId: { system: 'A', id: 'row-1' },
+      },
+      { skipOntologyCheck: true },
+    );
+    await ctx.store.putEntity(
+      {
+        ...ePartial,
+        name: 'second',
+        legacyId: { system: 'A', id: 'row-2' },
+      },
+      { skipOntologyCheck: true },
+    );
+    const found = await ctx.store.findByLegacyId({ system: 'A', id: 'row-2' });
+    expect(found).toBeDefined();
+    expect(found!.name).toBe('second');
+    expect(found!.legacyId).toEqual({ system: 'A', id: 'row-2' });
+  });
+
+  test('findByLegacyId returns undefined when no match exists', async () => {
+    await ctx.store.putEntity(
+      {
+        name: 'only',
+        entityType: 'Observation',
+        ontologyClass: 'Observation',
+        legacyId: { system: 'A', id: 'row-1' },
+        createdBy: mkProvenance('seed'),
+      } as unknown as Parameters<typeof ctx.store.putEntity>[0],
+      { skipOntologyCheck: true },
+    );
+    const missing = await ctx.store.findByLegacyId({ system: 'A', id: 'row-99' });
+    expect(missing).toBeUndefined();
+    // Distinct legacy systems must NOT cross-match — protects against the
+    // A/B/C subsystem boundary collapse Phase 41 D-13 warns about.
+    const wrongSystem = await ctx.store.findByLegacyId({ system: 'B', id: 'row-1' });
+    expect(wrongSystem).toBeUndefined();
+  });
+});
