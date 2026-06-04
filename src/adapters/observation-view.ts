@@ -69,38 +69,42 @@ export interface LegacyObservation {
 
 /**
  * Legacy daily-digest row shape — mirrors the response of
- * `GET /api/digests` per scripts/observations-api-server.mjs:630-687
- * (SELECT id, date, theme, summary, observation_ids, agents, files_touched, project).
- *
- * Note: snake_case keys are deliberate — this is the legacy WIRE shape A's
- * dashboard reads today; renaming to camelCase would break the dashboard
- * (Pitfall 2).
+ * `GET /api/digests` per scripts/observations-api-server.mjs pre-cutover
+ * SELECT block, which used SQL column aliases
+ * `observation_ids AS observationIds`, `files_touched AS filesTouched`,
+ * `created_at AS createdAt`. The dashboard at :3032 reads the camelCase
+ * names (see integrations/system-health-dashboard/src/pages/digests.tsx).
+ * Pitfall 2 requires preserving that camelCase wire shape.
  */
 export interface LegacyDigest {
   id: string;
   date: string;
   theme: string;
   summary: string;
-  observation_ids: string[];
+  observationIds: string[];
   agents: string[];
-  files_touched: string[];
+  filesTouched: string[];
+  quality: string;
+  createdAt: string;
   project: string;
 }
 
 /**
  * Legacy insight row shape — mirrors the response of
- * `GET /api/insights` per scripts/observations-api-server.mjs:705-751
- * (SELECT id, topic, summary, confidence, digest_ids, last_updated, project).
- *
- * Same snake_case rationale as `LegacyDigest`.
+ * `GET /api/insights` per scripts/observations-api-server.mjs pre-cutover
+ * SELECT block, which used SQL column aliases `digest_ids AS digestIds`,
+ * `last_updated AS lastUpdated`, `created_at AS createdAt`. The dashboard
+ * at :3032 reads the camelCase names
+ * (see integrations/system-health-dashboard/src/pages/insights.tsx).
  */
 export interface LegacyInsight {
   id: string;
   topic: string;
   summary: string;
   confidence: number;
-  digest_ids: string[];
-  last_updated: string;
+  digestIds: string[];
+  lastUpdated: string;
+  createdAt: string;
   project: string;
 }
 
@@ -156,15 +160,22 @@ export function observationToLegacy(entity: Entity): LegacyObservation {
  * Reshape a km-core Entity (`ontologyClass === 'Digest'`) into the legacy
  * daily-digest row shape A's dashboard at :3032 expects.
  *
- * Field source map (per scripts/observations-api-server.mjs:630-687 SELECT):
- *   - id              = entity.legacyId.id (preferred) or entity.id
- *   - date            = metadata.date or entity.validFrom or ''
- *   - theme           = metadata.theme or ''
- *   - summary         = metadata.summary or entity.description or ''
- *   - observation_ids = metadata.observation_ids (when an array) or []
- *   - agents          = metadata.agents (when an array) or []
- *   - files_touched   = metadata.files_touched (when an array) or []
- *   - project         = metadata.project or 'unknown'
+ * Field source map (the pre-cutover SQL handler aliased snake_case columns
+ * to camelCase on the way out — see git history of
+ * scripts/observations-api-server.mjs):
+ *   - id             = entity.legacyId.id (preferred) or entity.id
+ *   - date           = metadata.date or entity.validFrom or ''
+ *   - theme          = metadata.theme or ''
+ *   - summary        = metadata.summary or entity.description or ''
+ *   - observationIds = metadata.observation_ids (when an array) or []
+ *   - agents         = metadata.agents (when an array) or []
+ *   - filesTouched   = metadata.files_touched (when an array) or []
+ *   - quality        = metadata.quality or 'normal'
+ *   - createdAt      = metadata.createdAt or entity.validFrom or ''
+ *   - project        = metadata.project or 'unknown'
+ *
+ * Metadata field names stay snake_case (that's how SQLite + the migration
+ * script wrote them); only the wire-output keys are camelCase.
  */
 export function digestToLegacy(entity: Entity): LegacyDigest {
   const m = (entity.metadata ?? {}) as Record<string, unknown>;
@@ -179,13 +190,18 @@ export function digestToLegacy(entity: Entity): LegacyDigest {
       typeof m.summary === 'string'
         ? m.summary
         : (entity.description ?? ''),
-    observation_ids: Array.isArray(m.observation_ids)
+    observationIds: Array.isArray(m.observation_ids)
       ? (m.observation_ids as string[])
       : [],
     agents: Array.isArray(m.agents) ? (m.agents as string[]) : [],
-    files_touched: Array.isArray(m.files_touched)
+    filesTouched: Array.isArray(m.files_touched)
       ? (m.files_touched as string[])
       : [],
+    quality: typeof m.quality === 'string' ? m.quality : 'normal',
+    createdAt:
+      typeof m.createdAt === 'string'
+        ? m.createdAt
+        : (entity.validFrom ?? ''),
     project: typeof m.project === 'string' ? m.project : 'unknown',
   };
 }
@@ -194,14 +210,17 @@ export function digestToLegacy(entity: Entity): LegacyDigest {
  * Reshape a km-core Entity (`ontologyClass === 'Insight'`) into the legacy
  * insight row shape A's dashboard at :3032 expects.
  *
- * Field source map (per scripts/observations-api-server.mjs:705-751 SELECT):
- *   - id           = entity.legacyId.id (preferred) or entity.id
- *   - topic        = metadata.topic or entity.name
- *   - summary      = metadata.summary or entity.description or ''
- *   - confidence   = metadata.confidence (when a finite number) or 0
- *   - digest_ids   = metadata.digest_ids (when an array) or []
- *   - last_updated = metadata.last_updated or entity.validFrom or ''
- *   - project      = metadata.project or 'unknown'
+ * Field source map (pre-cutover SQL handler aliased snake_case columns to
+ * camelCase on the way out — see git history of
+ * scripts/observations-api-server.mjs):
+ *   - id          = entity.legacyId.id (preferred) or entity.id
+ *   - topic       = metadata.topic or entity.name
+ *   - summary     = metadata.summary or entity.description or ''
+ *   - confidence  = metadata.confidence (when a finite number) or 0
+ *   - digestIds   = metadata.digest_ids (when an array) or []
+ *   - lastUpdated = metadata.last_updated or entity.validFrom or ''
+ *   - createdAt   = metadata.createdAt or entity.validFrom or ''
+ *   - project     = metadata.project or 'unknown'
  */
 export function insightToLegacy(entity: Entity): LegacyInsight {
   const m = (entity.metadata ?? {}) as Record<string, unknown>;
@@ -213,10 +232,14 @@ export function insightToLegacy(entity: Entity): LegacyInsight {
         ? m.summary
         : (entity.description ?? ''),
     confidence: typeof m.confidence === 'number' ? m.confidence : 0,
-    digest_ids: Array.isArray(m.digest_ids) ? (m.digest_ids as string[]) : [],
-    last_updated:
+    digestIds: Array.isArray(m.digest_ids) ? (m.digest_ids as string[]) : [],
+    lastUpdated:
       typeof m.last_updated === 'string'
         ? m.last_updated
+        : (entity.validFrom ?? ''),
+    createdAt:
+      typeof m.createdAt === 'string'
+        ? m.createdAt
         : (entity.validFrom ?? ''),
     project: typeof m.project === 'string' ? m.project : 'unknown',
   };
