@@ -531,13 +531,25 @@ export class GraphKMStore extends EventEmitter {
   /**
    * D-34: active-only filter helper. Entities without `validUntil` are
    * ALWAYS treated as active — this short-circuit (`validUntil ===
-   * undefined`) is what preserves Phase 37/38 backward compatibility:
-   * none of the existing 33 tests set `validUntil`, so the new active-
-   * only default does not regress them. Entities WITH `validUntil` are
-   * active iff `new Date(validUntil).getTime() > nowMs`.
+   * undefined || validUntil === null`) is what preserves Phase 37/38
+   * backward compatibility: none of the existing 33 tests set
+   * `validUntil`, so the new active-only default does not regress them.
+   *
+   * The `null` branch is the JSON-roundtrip BC fix (Phase 44 debug):
+   * Phase 42/44 migrations (`migrate-sqlite-to-kmcore.mjs`,
+   * `augment-team-field-42.2.mjs`) emit `validUntil: null` for every
+   * entity. Without this branch, every node in the persisted
+   * `general.json` is filtered out by default (`new Date(null)
+   * .getTime() === 0`, which is `<= nowMs`). Treating `null` and
+   * `undefined` identically is the "no expiry" semantic that matches
+   * caller intent AND OKM legacy behavior. See
+   * `.planning/phases/44-rest-api-git-snapshots/44-DEBUG-SUMMARY-typed-views.md`.
+   *
+   * Entities WITH a real `validUntil` string are active iff
+   * `new Date(validUntil).getTime() > nowMs`.
    */
   private isActive(entity: Entity, nowMs: number): boolean {
-    if (entity.validUntil === undefined) return true;
+    if (entity.validUntil === undefined || entity.validUntil === null) return true;
     return new Date(entity.validUntil).getTime() > nowMs;
   }
 
