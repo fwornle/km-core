@@ -23,6 +23,7 @@
 
 import type { GraphKMStore } from '../../store/GraphKMStore.js';
 import type { Entity, Relation } from '../../types/entity.js';
+import type { EntityId } from '../../ids/branded.js';
 import type { RouteDescriptor, KmCoreRouterOptions } from '../router.js';
 import {
   entityToWire,
@@ -172,7 +173,16 @@ export function queryRoutes(
         attributes: entityToWire(n.attributes),
       }));
       const wireEdges = exported.edges.map((e) => {
-        const w = relationToWire({ ...e.attributes, key: e.key });
+        // 44-09 Drift #2 fix: graphology's export() puts source/target at the
+        // TOP LEVEL of each edge object — NOT inside e.attributes. Without
+        // propagating them via `from`/`to`, relationToWire receives undefined
+        // endpoints and emits empty-string source/target on the wire.
+        const w = relationToWire({
+          ...e.attributes,
+          from: e.source as EntityId,
+          to: e.target as EntityId,
+          key: e.key,
+        });
         const out: {
           key: string;
           source: string;
