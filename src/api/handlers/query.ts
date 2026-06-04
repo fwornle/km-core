@@ -327,17 +327,28 @@ export function queryRoutes(
         }
       }
 
-      // Component BFS for component count + connectivity ratio.
+      // 44-09 Drift #3 fix: per-component BFS now accumulates nodeIds so the
+      // `components` array is populated (was `[]` before). Each component
+      // record is `{index, isMainComponent, nodeIds, size}` per the OKM
+      // GraphConnectivityEndpointResponse fixture. The main component is the
+      // one with maximum size; ties (e.g. two equally-large components) break
+      // by encounter order (first one wins isMainComponent=true).
       const visited = new Set<string>();
-      const componentSizes: number[] = [];
+      const componentRecords: Array<{
+        index: number;
+        isMainComponent: boolean;
+        nodeIds: string[];
+        size: number;
+      }> = [];
+      let componentIndex = 0;
       for (const node of nodeAttrs.keys()) {
         if (visited.has(node)) continue;
         const queue: string[] = [node];
         visited.add(node);
-        let size = 0;
+        const nodeIds: string[] = [];
         while (queue.length) {
           const cur = queue.shift()!;
-          size += 1;
+          nodeIds.push(cur);
           for (const n of graph.neighbors(cur)) {
             if (!visited.has(n)) {
               visited.add(n);
@@ -345,10 +356,32 @@ export function queryRoutes(
             }
           }
         }
-        componentSizes.push(size);
+        componentRecords.push({
+          index: componentIndex++,
+          isMainComponent: false,
+          nodeIds,
+          size: nodeIds.length,
+        });
       }
-      const componentCount = componentSizes.length;
-      const largest = componentSizes.reduce((a, b) => (b > a ? b : a), 0);
+
+      // Flag the maximum-size component as isMainComponent (first-wins on ties).
+      if (componentRecords.length > 0) {
+        let mainIdx = 0;
+        let mainSize = componentRecords[0].size;
+        for (let i = 1; i < componentRecords.length; i++) {
+          if (componentRecords[i].size > mainSize) {
+            mainSize = componentRecords[i].size;
+            mainIdx = i;
+          }
+        }
+        componentRecords[mainIdx].isMainComponent = true;
+      }
+
+      const componentCount = componentRecords.length;
+      const largest = componentRecords.reduce(
+        (max, c) => (c.size > max ? c.size : max),
+        0,
+      );
       const connectivity = graph.order > 0 ? largest / graph.order : 0;
 
       res.json({
@@ -360,7 +393,7 @@ export function queryRoutes(
           connectivity,
           trueOrphans,
           islandNodes: [] as unknown[],
-          components: [] as unknown[],
+          components: componentRecords,
         },
       });
     },
