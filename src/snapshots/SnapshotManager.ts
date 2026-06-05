@@ -129,6 +129,14 @@ export class SnapshotManager {
       timeout: 15000,
       maxBuffer: 10 * 1024 * 1024,
       stdio: 'pipe',
+      // Pin cwd to the work tree. Without this, git inherits the caller
+      // process's cwd. If the caller runs from inside a submodule (e.g. B's
+      // sse-server starts with cwd=/coding/integrations/mcp-server-semantic-analysis
+      // per supervisord.conf), git refuses the parent-repo `add` with
+      // `fatal: in unpopulated submodule '...'` even though GIT_DIR + GIT_WORK_TREE
+      // both point at the parent. Setting cwd explicitly makes execGit
+      // robust to any caller cwd.
+      cwd: env.workTree,
       env: {
         ...process.env,
         GIT_DIR: env.gitDir,
