@@ -157,8 +157,26 @@ export function observationToLegacy(entity: Entity): LegacyObservation {
 }
 
 /**
- * Reshape a km-core Entity (`ontologyClass === 'Digest'`) into the legacy
- * daily-digest row shape A's dashboard at :3032 expects.
+ * LOCKED contract — Pitfall 2 wire-shape lock (Plan 44-16, 2026-06-07).
+ *
+ * Wire keys MUST stay camelCase: observationIds, filesTouched, createdAt.
+ * Rationale (do not relitigate without an amendment):
+ *   1. Pre-cutover SQLite handler aliased columns to camelCase
+ *      (`observation_ids AS observationIds`, `files_touched AS filesTouched`,
+ *      `created_at AS createdAt`) — the dashboard at :3032 has been reading
+ *      camelCase since pre-Phase-44.
+ *   2. Seventeen dashboard consumer sites read `digest.observationIds` /
+ *      `digest.filesTouched` verbatim
+ *      (integrations/system-health-dashboard/src/pages/digests.tsx +
+ *      ukbSlice.ts + markdown-text.tsx).
+ *   3. tests/integration/typed-views.test.js REQUIRED_DIGEST_KEYS asserts
+ *      these camelCase keys verbatim (Plan 44-16 lock).
+ *   4. metadata storage shape stays snake_case (legacy SQLite + migration
+ *      script inheritance — `metadata.observation_ids`,
+ *      `metadata.files_touched`). The reshape function below is the
+ *      case-shift boundary.
+ *
+ * See: .planning/phases/44-rest-api-git-snapshots/44-CONTEXT-amendment-4.md
  *
  * Field source map (the pre-cutover SQL handler aliased snake_case columns
  * to camelCase on the way out — see git history of
@@ -173,9 +191,6 @@ export function observationToLegacy(entity: Entity): LegacyObservation {
  *   - quality        = metadata.quality or 'normal'
  *   - createdAt      = metadata.createdAt or entity.validFrom or ''
  *   - project        = metadata.project or 'unknown'
- *
- * Metadata field names stay snake_case (that's how SQLite + the migration
- * script wrote them); only the wire-output keys are camelCase.
  */
 export function digestToLegacy(entity: Entity): LegacyDigest {
   const m = (entity.metadata ?? {}) as Record<string, unknown>;
@@ -207,8 +222,25 @@ export function digestToLegacy(entity: Entity): LegacyDigest {
 }
 
 /**
- * Reshape a km-core Entity (`ontologyClass === 'Insight'`) into the legacy
- * insight row shape A's dashboard at :3032 expects.
+ * LOCKED contract — Pitfall 2 wire-shape lock (Plan 44-16, 2026-06-07).
+ *
+ * Wire keys MUST stay camelCase: digestIds, lastUpdated, createdAt.
+ * Rationale (do not relitigate without an amendment):
+ *   1. Pre-cutover SQLite handler aliased columns to camelCase
+ *      (`digest_ids AS digestIds`, `last_updated AS lastUpdated`,
+ *      `created_at AS createdAt`) — the dashboard at :3032 has been reading
+ *      camelCase since pre-Phase-44.
+ *   2. Seventeen dashboard consumer sites read `insight.digestIds` /
+ *      `insight.lastUpdated` verbatim
+ *      (integrations/system-health-dashboard/src/pages/insights.tsx + coverage.tsx
+ *      + ukbSlice.ts).
+ *   3. tests/integration/typed-views.test.js REQUIRED_INSIGHT_KEYS asserts
+ *      these camelCase keys verbatim (Plan 44-16 lock).
+ *   4. metadata storage shape stays snake_case (legacy SQLite + migration
+ *      script inheritance — `metadata.digest_ids`, `metadata.last_updated`).
+ *      The reshape function below is the case-shift boundary.
+ *
+ * See: .planning/phases/44-rest-api-git-snapshots/44-CONTEXT-amendment-4.md
  *
  * Field source map (pre-cutover SQL handler aliased snake_case columns to
  * camelCase on the way out — see git history of
