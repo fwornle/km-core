@@ -62,6 +62,16 @@ export interface KmCoreRouterOptions {
    *  envelope (CONTEXT S-2 revised). When omitted, restartCommand is null in
    *  the response and the operator/watchdog uses their system default. */
   restartCommand?: string;
+  /** Phase 45 Plan 04: directory containing per-system display overlay files
+   *  (`{ontologyDir}/{system}.display.json`). Consumed by the ontology handler
+   *  ONLY when `?withDisplay=true` is requested. When omitted the enriched
+   *  branch falls back to {} (no display block). Pre-Phase-45 BC path
+   *  (no query param) is unaffected. */
+  ontologyDir?: string;
+  /** Phase 45 Plan 04: per-system overlay-file lookup name. Defaults to
+   *  the ontology registry's first loaded non-upper domain (when omitted).
+   *  Operators with a non-default naming convention can override here. */
+  displayOverlaySystem?: string;
 }
 
 /**

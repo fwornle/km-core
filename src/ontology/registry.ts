@@ -68,8 +68,17 @@ export class OntologyRegistry {
 
     // Discover all other .json files; alphabetical sort is the D-27 deterministic
     // load-order contract — preserved verbatim from OKM.
+    //
+    // Phase 45 Plan 04 amendment: skip overlay files (`*.display.json`) — these
+    // are display-hint overlays consumed by the ontology HTTP handler when
+    // ?withDisplay=true is requested; they intentionally do NOT carry the
+    // ontology meta/classes shape. Without this filter, the registry emits a
+    // noisy "skipping malformed ontology file" warning for every overlay.
     const files = readdirSync(this.ontologyDir).filter(
-      (f) => f.endsWith('.json') && f !== 'upper.json',
+      (f) =>
+        f.endsWith('.json') &&
+        f !== 'upper.json' &&
+        !f.endsWith('.display.json'),
     );
     for (const file of files.sort()) {
       try {
@@ -107,8 +116,12 @@ export class OntologyRegistry {
     this.registerClasses(newClasses, upper, 'upper');
     newDomains.add('upper');
 
+    // Same overlay-skip filter as loadFromDisk() above (Phase 45 Plan 04).
     const files = readdirSync(this.ontologyDir).filter(
-      (f) => f.endsWith('.json') && f !== 'upper.json',
+      (f) =>
+        f.endsWith('.json') &&
+        f !== 'upper.json' &&
+        !f.endsWith('.display.json'),
     );
     for (const file of files.sort()) {
       try {
