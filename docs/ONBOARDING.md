@@ -213,10 +213,12 @@ A standalone vitest spec exists to catch the exact failure mode where Step 7 is 
 
 ```bash
 cd lib/km-core
-npx vitest run tests/onboarding/cleanup-verifier.spec.ts
+npx vitest run --config tests/onboarding/vitest.config.ts
 ```
 
 **Expected output:** the test PASSES — confirming no `LslHeartbeatRotator` entity is present in the live KG. If it FAILS, follow the remediation hint printed in the failure message (which restates the Step 7b DELETE command for copy-paste convenience).
+
+> The dedicated config is required because the default `vitest.config.ts` restricts `include` to `tests/**/*.test.ts` — keeping this `.spec.ts` out of the regular `npm test` run so the CI suite is not coupled to a live obs-api on `localhost:12436`.
 
 ## Caveats
 
