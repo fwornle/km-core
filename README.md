@@ -56,8 +56,6 @@ Vitest 4.x with `environment: node`. Integration tests under `tests/integration/
 
 For a hands-on walkthrough of registering a new SubComponent, ingesting it via the obs-api, verifying it in the unified viewer, and cleaning up — see the [Onboarding guide](./docs/ONBOARDING.md).
 
-> Note: `docs/ONBOARDING.md` is delivered by Plan 46-05 (Wave 3). Until that lands, the link above resolves to "file not found" — that's expected.
-
 ## Install
 
 KM-Core is currently consumed via git submodule, not npm:
