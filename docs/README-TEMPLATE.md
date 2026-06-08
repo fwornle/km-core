@@ -1,8 +1,9 @@
 <!--
 OVERRIDE_CONSTRAINT: documentation-filename-format
-Rationale: README-TEMPLATE.md is a canonical README skeleton (locked by D-46-02 in
-46-CONTEXT.md / P-1 in 46-PATTERNS.md). The uppercase "TEMPLATE" suffix is deliberate.
-The Phase 46 plan's must_haves block explicitly requires this exact path.
+Rationale: README-TEMPLATE.md is a canonical README skeleton. The uppercase
+"TEMPLATE" suffix is deliberate and is consumed by the project's planning
+record. Do not rename or lowercase the suffix without coordinating across the
+shipped per-system READMEs that reference this file.
 -->
 
 # {System Name}
@@ -16,7 +17,7 @@ The Phase 46 plan's must_haves block explicitly requires this exact path.
 - **Ingest adapters:** `{path/to/adapter}` — {which event sources / writers, or "— (owned by `{other-system-name}`)"}
 - **Domain eval / dedup:** `{path/to/dedup-or-scoring}` — {system-specific scoring logic, or "— (owned by `{other-system-name}`)"}
 
-For slots the system does NOT own: write `— (owned by {other-system-name})` rather than omitting the line, so the ownership contract is visible at a glance. Reference systems by their concrete repo/package name (e.g., `coding`, `mcp-server-semantic-analysis`, `operational-knowledge-management`), not by internal milestone shorthand — these READMEs travel with their repos and must read sensibly to a future contributor with no v7.x context.
+For slots the system does NOT own: write `— (owned by {other-system-name})` rather than omitting the line, so the ownership contract is visible at a glance. Reference systems by their concrete repo/package name (e.g., `coding`, `mcp-server-semantic-analysis`, `operational-knowledge-management`), not by internal milestone shorthand. Likewise reference features by their concrete name (e.g., "the `/api/v1/` REST contract", "the `SnapshotManager` git-tag backend"), not by phase/plan/wave/version shorthand — these READMEs travel with their repos and must read sensibly to a future contributor with no project-internal planning context.
 
 ## Architecture
 

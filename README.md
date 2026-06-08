@@ -1,6 +1,6 @@
 # @fwornle/km-core
 
-KM-Core is the SHARED CORE of the v7.x KM unification — canonical `Entity` / `Relation` / `Layer` / `ProvenanceStamp` types, a `GraphKMStore` adapter (Graphology in-memory + LevelDB durable + git-tracked per-domain JSON exports), an OntologyRegistry, a 4-stage IngestPipeline with layered deduplication, a framework-agnostic REST router, and git-tag-backed snapshots — stabilized through Phase 44 (REST + SnapshotManager wire-shape lock) and Phase 45 (display-overlay).
+KM-Core is the SHARED CORE for cross-system knowledge-graph unification — canonical `Entity` / `Relation` / `Layer` / `ProvenanceStamp` types, a `GraphKMStore` adapter (Graphology in-memory + LevelDB durable + git-tracked per-domain JSON exports), an OntologyRegistry, a 4-stage IngestPipeline with layered deduplication, a framework-agnostic REST router at `/api/v1/`, git-tag-backed snapshots via `SnapshotManager`, and an ontology display-overlay surface for consumer-side rendering hints.
 
 ## Configurations Owned
 
@@ -30,7 +30,7 @@ The ingest sequence shows the canonical write path: consumer calls `IngestPipeli
 | A new Entity type field | `src/types/entity.ts` | `cd lib/km-core && npm test` |
 | A new REST endpoint | `src/api/handlers/<resource>.ts` + register in `src/api/router.ts` | `cd lib/km-core && npm test` (router tests cover the surface) |
 | A new ingest stage | `src/pipeline/IngestPipeline.ts` + `src/pipeline/types.ts` | `cd lib/km-core && npm test -- pipeline` |
-| Extend display overlay (Phase 45) | `src/ontology/display-overlay.ts` | `cd lib/km-core && npm test -- display-overlay` |
+| Extend display overlay | `src/ontology/display-overlay.ts` | `cd lib/km-core && npm test -- display-overlay` |
 | A new dedup layer | `src/dedup/<Layer>.ts` + register in `LayeredDeduplicator.ts` | `cd lib/km-core && npm test -- dedup` |
 | A new snapshot operation | `src/snapshots/SnapshotManager.ts` | `cd lib/km-core && npm test -- snapshots` |
 
@@ -72,7 +72,7 @@ npm run build
 
 ```typescript
 import {
-  // Canonical types (Phase 37+)
+  // Canonical types
   type Entity,
   type Relation,
   type Layer,
@@ -91,7 +91,7 @@ import {
   GraphKMStore,
   type GraphKMStoreOptions,
 
-  // Ontology Registry (Phase 38)
+  // Ontology Registry
   OntologyRegistry,
   type OntologyRegistryOptions,
   loadOntologyFile,
@@ -103,13 +103,13 @@ import {
   type OntologyClass,
   type ResolvedClass,
 
-  // Provenance segment merge (Phase 39)
+  // Provenance segment merge
   mergeDescriptionSegment,
   backfillEntityDataModel,
   type BackfillOptions,
   type BackfillResult,
 
-  // Ingest pipeline (Phase 40)
+  // Ingest pipeline
   IngestPipeline,
   LayeredDeduplicator,
   JaccardNameMatcher,
@@ -118,23 +118,23 @@ import {
   type IngestPipelineOpts,
   type IngestResult,
 
-  // Online-learning adapter + post-hoc resolution (Phase 41)
+  // Online-learning adapter + post-hoc resolution
   reprojectFromOnlineStore,
   resolveEntities,
   mergeEntities,
 
-  // Offline UKB / embedding default (Phase 42)
+  // Offline UKB / embedding default
   syncQdrantFromStore,
   FastembedEmbeddingClient,
 
-  // REST router + Zod contracts + snapshots (Phase 44)
+  // REST router + Zod contracts + snapshots
   createKmCoreRouter,
   SnapshotManager,
   observationToLegacy,
   digestToLegacy,
   insightToLegacy,
 
-  // Legacy-ingest adapter (Phase 44 Plan 12)
+  // Legacy-ingest adapter
   legacyObservationToEntity,
   legacyDigestToEntity,
   legacyInsightToEntity,
@@ -153,9 +153,9 @@ import { resolveEntities, mergeEntities } from '@fwornle/km-core/maintenance';
 
 `GraphKMStore` extends Node's `EventEmitter` and fires `entity:put`, `entity:delete`, `relation:added`, `relation:removed` events for consumers (e.g. Redis pub/sub bridges) to subscribe to.
 
-Phase 45 added a `display-overlay` surface at `src/ontology/display-overlay.ts` — consumers fetch ontology classes with `?withDisplay=true` to receive display hints (icons, colors, label positions) merged in. See `src/ontology/display-overlay.ts` for the overlay schema.
+The `display-overlay` surface at `src/ontology/display-overlay.ts` lets consumers fetch ontology classes with `?withDisplay=true` to receive display hints (icons, colors, label positions) merged in. See `src/ontology/display-overlay.ts` for the overlay schema.
 
-Phase 44 added `SnapshotManager` for git-tag-backed snapshots over `.data/exports/`: snapshot IDs are git tags of the form `snapshot/<label>-<timestamp>`, restore = `git checkout <tag> -- exportsRel/` + caller wipes LevelDB and restarts (hard-reset semantics, handler wraps with `restartRequired: true`).
+`SnapshotManager` provides git-tag-backed snapshots over `.data/exports/`: snapshot IDs are git tags of the form `snapshot/<label>-<timestamp>`, restore = `git checkout <tag> -- exportsRel/` + caller wipes LevelDB and restarts (hard-reset semantics, handler wraps with `restartRequired: true`).
 
 ## Per-domain Export Contract
 

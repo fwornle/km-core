@@ -12,7 +12,7 @@ code; this exception is scoped to a tutorial entity that is deleted at Step 7.
 
 # KM-Core Onboarding: The LslHeartbeatRotator Exercise
 
-This guide walks a new KM-Core contributor through the seven verifiable steps that satisfy Phase 46 SC-3: clone the repo, build & test the shared core, inspect the live ontology, ingest a tutorial `SubComponent` entity through the canonical REST surface, verify it in both the API and the Phase 45 unified viewer, and clean it up. Each step has a runnable shell command and an **Expected output** assertion so a contributor knows whether the step worked without re-reading any source code.
+This guide walks a new KM-Core contributor through seven verifiable steps: clone the repo, build & test the shared core, inspect the live ontology, ingest a tutorial `SubComponent` entity through the canonical REST surface, verify it in both the API and the unified viewer, and clean it up. Each step has a runnable shell command and an **Expected output** assertion so a contributor knows whether the step worked without re-reading any source code.
 
 For an overview of where KM-Core sits among the consumer systems (`coding`, `mcp-server-semantic-analysis`, `operational-knowledge-management`), see [../README.md](../README.md).
 
@@ -41,9 +41,9 @@ npm run build
 npm test
 ```
 
-**Expected output:** vitest reports all tests GREEN. The test count varies by phase (≥ 100 tests after Phase 44; ≥ 130 after Phase 45) but the final line should read `Test Files <N> passed (<N>)` and `Tests <M> passed (<M>)` with **zero** failures.
+**Expected output:** vitest reports all tests GREEN. The test count grows as features land (typically 100+ tests), but the final line should read `Test Files <N> passed (<N>)` and `Tests <M> passed (<M>)` with **zero** failures.
 
-**If this fails:** the most common cause is a stale `dist/` from a prior partial build. Run `npm run clean && npm run build` (if `clean` exists) or `rm -rf dist && npm run build` and retry `npm test`. If a specific test fails, read the test name — it tells you which Phase the regression belongs to.
+**If this fails:** the most common cause is a stale `dist/` from a prior partial build. Run `npm run clean && npm run build` (if `clean` exists) or `rm -rf dist && npm run build` and retry `npm test`. If a specific test fails, read the test name — it identifies the subsystem the regression belongs to.
 
 ## Step 2 — Inspect the ontology
 
@@ -88,7 +88,7 @@ cat .data/knowledge-graph/exports/general.json | \
 
 ## Step 4 — Ingest the tutorial entity via the obs-api
 
-The canonical write endpoint for new entities (per the Phase 44 wire-shape lock at `lib/km-core/src/api/handlers/entities.ts:107-145`) is **`POST http://localhost:12436/api/v1/entities`** on the host-side obs-api port. Do NOT substitute any other entity write path — the entities handler is the contract.
+The canonical write endpoint for new entities is **`POST http://localhost:12436/api/v1/entities`** on the host-side obs-api port (handler at `lib/km-core/src/api/handlers/entities.ts:107-145`). Do NOT substitute any other entity write path — the entities handler is the contract.
 
 Make sure the obs-api is running locally:
 
@@ -109,7 +109,7 @@ INGEST_RESPONSE=$(curl -s -X POST http://localhost:12436/api/v1/entities \
     "ontologyClass": "SubComponent",
     "layer": "evidence",
     "componentName": "LiveLoggingSystem",
-    "description": "Tutorial entity from the Phase 46 onboarding guide. Demonstrates rotating LSL heartbeat tokens. Safe to purge — see cleanup step."
+    "description": "Tutorial entity from the KM-Core onboarding guide. Demonstrates rotating LSL heartbeat tokens. Safe to purge — see cleanup step."
   }')
 echo "$INGEST_RESPONSE" | jq '.'
 export TUTORIAL_ENTITY_ID=$(echo "$INGEST_RESPONSE" | jq -r '.data.id')
@@ -133,9 +133,9 @@ curl -s 'http://localhost:12436/api/v1/entities?ontologyClass=SubComponent' | \
 
 **If this fails:** if the result is empty, the entity is not in the `SubComponent` index. Re-fetch by id directly to see whether it is stored at all: `curl -s "http://localhost:12436/api/v1/entities/$TUTORIAL_ENTITY_ID" | jq '.'`. A `data: null` response means the POST in Step 4 silently failed; re-read its response body.
 
-## Step 6 — Verify via the unified viewer (Phase 45)
+## Step 6 — Verify via the unified viewer
 
-The Phase 45 unified viewer surfaces entities visually so you can confirm the tutorial entity is also reachable through the dashboard. The viewer depends on the system-health-dashboard service.
+The unified viewer surfaces entities visually so you can confirm the tutorial entity is also reachable through the dashboard. The viewer depends on the system-health-dashboard service.
 
 **Precheck — confirm the dashboard is up:**
 
@@ -230,8 +230,8 @@ These caveats apply to anyone running or amending this exercise. They are delibe
 
 3. **`no-evolutionary-names` override.** The `LslHeartbeatRotator` name will likely pattern-match the `no-evolutionary-names` constraint regex (the suffix `Rotator` and the proximity to LSL-versioning naming patterns are typical false-positive triggers). The HTML override comment at the top of this file (`OVERRIDE_CONSTRAINT: no-evolutionary-names`) documents the rationale. **Do NOT remove the override comment** when amending this guide — it is the operative documentation for downstream contributors who hit the same false positive when authoring or copying the entity.
 
-4. **REST endpoint stability.** Step 4's `POST /api/v1/entities` is locked to the Phase 44 wire shape (see `lib/km-core/src/api/handlers/entities.ts:107-151` and Plan 44-16 SUMMARY). Do NOT substitute a different write path — that endpoint is the only contract this guide assumes. If a future km-core release renames the canonical write endpoint, this entire guide needs a coordinated update, not a one-line patch.
+4. **REST endpoint stability.** Step 4's `POST /api/v1/entities` is the canonical wire shape (see `lib/km-core/src/api/handlers/entities.ts:107-151`). Do NOT substitute a different write path — that endpoint is the only contract this guide assumes. If a future km-core release renames the canonical write endpoint, this entire guide needs a coordinated update, not a one-line patch.
 
 ---
 
-*Phase 46 / Plan 05 — Verifiable Onboarding Guide for KM-Core (D-46-04, SC-3)*
+*KM-Core Verifiable Onboarding Guide — LslHeartbeatRotator exercise.*
