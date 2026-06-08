@@ -193,7 +193,7 @@ curl -s "http://localhost:12436/api/v1/entities?ontologyClass=SubComponent" \
 ENTITY_ID=$(curl -s "http://localhost:12436/api/v1/entities?ontologyClass=SubComponent" \
   | jq -r '.data[] | select(.name == "LslHeartbeatRotator") | .id')
 echo "Deleting entity: $ENTITY_ID"
-curl -s -X DELETE "http://localhost:12436/api/v1/entities/${ENTITY_ID}" | jq '.'
+curl -X DELETE -s "http://localhost:12436/api/v1/entities/${ENTITY_ID}" | jq '.'
 ```
 
 **Expected output:** `{"success": true, "data": {"deleted": true, "id": "019..."}}` (HTTP 200). If `deleted` is `false`, the id was not found — re-check the preview in Step 7a.
