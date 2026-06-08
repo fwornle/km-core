@@ -4,12 +4,12 @@ KM-Core is the SHARED CORE of the v7.x KM unification — canonical `Entity` / `
 
 ## Configurations Owned
 
-KM-Core is the SHARED CORE — owns no per-system config. The four standard slots are externalized:
+KM-Core is the SHARED CORE — owns no per-system config. The four standard slots are externalized to each consumer:
 
-- **Ontology:** — (owned by per-system: A reads `.data/ontologies/coding-ontology.json`; B reads the same coding ontology; C owns RaaS / KPI-FW / business lower ontologies under its own `ontology/*.json`)
-- **LLM providers:** — (owned by per-system: A configures `_work/rapid-llm-proxy`; B owns `config/workflows/*.json` `processOverrides`; C owns its own `lib/llm/providers/`)
-- **Ingest adapters:** — (owned by per-system: A's `src/live-logging/ObservationWriter.js`; B's `wave-controller`; C's `src/ingest/adapters/` for MkDocs / Confluence / CodeBeamer)
-- **Domain eval / dedup:** — (owned by per-system: A's Jaccard 0.45 + 4-keyword floor in `ObservationWriter.js`; C's `src/intelligence/dedup.ts`)
+- **Ontology:** — (owned per-system: `coding` reads `.data/ontologies/coding-ontology.json`; `mcp-server-semantic-analysis` reads the same coding ontology; `operational-knowledge-management` owns RaaS / KPI-FW / business lower ontologies under its own `ontology/*.json`)
+- **LLM providers:** — (owned per-system: `coding` configures `_work/rapid-llm-proxy`; `mcp-server-semantic-analysis` owns `config/workflows/*.json` `processOverrides`; `operational-knowledge-management` owns its own `lib/llm/providers/`)
+- **Ingest adapters:** — (owned per-system: `coding`'s `src/live-logging/ObservationWriter.js`; `mcp-server-semantic-analysis`'s `wave-controller`; `operational-knowledge-management`'s `src/ingest/adapters/` for MkDocs / Confluence / CodeBeamer)
+- **Domain eval / dedup:** — (owned per-system: `coding`'s Jaccard 0.45 + 4-keyword floor in `ObservationWriter.js`; `operational-knowledge-management`'s `src/intelligence/dedup.ts`)
 
 KM-Core PROVIDES the surfaces (types, store, registry, pipeline, dedup primitives, REST router, snapshot manager) but does NOT own any per-system data files or routing config — those live in each consumer.
 
@@ -17,7 +17,7 @@ KM-Core PROVIDES the surfaces (types, store, registry, pipeline, dedup primitive
 
 ![KM-Core architecture](../../docs/images/km-core-architecture.png)
 
-The high-level architecture shows the SHARED CORE (Types & IDs, Store, Ontology Registry, Ingest Pipeline, REST + Snapshots) bounded against the PER-SYSTEM CONFIG zone (ontology files, LLM provider config, ingest adapters, domain dedup rules). Consumer systems A / B / C invoke the REST router under `/api/v1/`; the pipeline threads `ProvenanceStamp` through dedup and store stages; the store emits `entity:put` / `entity:delete` / `relation:added` / `relation:removed` events plus debounced atomic JSON exports per ontology lower-domain.
+The high-level architecture shows the SHARED CORE (Types & IDs, Store, Ontology Registry, Ingest Pipeline, REST + Snapshots) bounded against the PER-SYSTEM CONFIG zone (ontology files, LLM provider config, ingest adapters, domain dedup rules). Consumer systems invoke the REST router under `/api/v1/`; the pipeline threads `ProvenanceStamp` through dedup and store stages; the store emits `entity:put` / `entity:delete` / `relation:added` / `relation:removed` events plus debounced atomic JSON exports per ontology lower-domain.
 
 ![KM-Core ingest sequence](../../docs/images/km-core-ingest-sequence.png)
 
@@ -38,10 +38,10 @@ Every row above gives a file path AND a verification command — this table is t
 
 ## Related Systems
 
-- [A: coding](../../README.md) — observation source, host runtime, obs-api at `localhost:12436`
-- [B: mcp-server-semantic-analysis](../../integrations/mcp-server-semantic-analysis/README.md) — agent pipeline, wave-analysis workflow
-- [C: OKM (operational-knowledge-management)](https://bmw.ghe.com/adpnext-apps/operational-knowledge-management) — RCA + operational ingest (external BMW GHE repo)
-- KM-Core is consumed by all three systems as the shared persistence + contract layer.
+- [coding](../../README.md) — observation source, host runtime, obs-api at `localhost:12436`
+- [mcp-server-semantic-analysis](../../integrations/mcp-server-semantic-analysis/README.md) — agent pipeline, wave-analysis workflow
+- [operational-knowledge-management](https://bmw.ghe.com/adpnext-apps/operational-knowledge-management) — RCA + operational ingest ("OKM" for short, external BMW GHE repo)
+- KM-Core is consumed by these systems as the shared persistence + contract layer; additional consumers can adopt the same pattern.
 
 ## Tests / Verify
 
