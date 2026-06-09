@@ -51,6 +51,29 @@ const DISPLAY_FIXTURE = {
   Detail: { color: '#6b7280', icon: 'Layers', shape: 'circle' },
 };
 
+// Phase 55 Plan 02 — fixture exercising the new borderStyle + pulseRule fields.
+// Observation has solid+pulseRule; Component has solid+null; Digest has no new
+// fields at all (BC — they must stay undefined on the wire).
+const DISPLAY_FIXTURE_PHASE_55 = {
+  Observation: {
+    color: '#10b981',
+    icon: '📝',
+    shape: 'circle' as const,
+    borderStyle: 'solid' as const,
+    pulseRule: 'lastUpdatedWithin:60s' as const,
+  },
+  Component: {
+    color: '#3b82f6',
+    icon: '🧩',
+    shape: 'square' as const,
+    borderStyle: 'solid' as const,
+    pulseRule: null,
+  },
+  // Digest deliberately omits borderStyle + pulseRule to exercise BC behavior
+  // (undefined on wire response).
+  Digest: { color: '#f59e0b', icon: '📋', shape: 'diamond' as const },
+};
+
 interface TestEnv {
   tmpdir: string;
   ontologyDir: string;
@@ -58,7 +81,10 @@ interface TestEnv {
   app: express.Express;
 }
 
-async function buildEnv(opts: { withDisplayFile: boolean }): Promise<TestEnv> {
+async function buildEnv(opts: {
+  withDisplayFile: boolean;
+  phase55Fixture?: boolean;
+}): Promise<TestEnv> {
   const tmpdir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'km-core-ontology-display-'),
   );
@@ -75,9 +101,10 @@ async function buildEnv(opts: { withDisplayFile: boolean }): Promise<TestEnv> {
     'utf8',
   );
   if (opts.withDisplayFile) {
+    const fixture = opts.phase55Fixture ? DISPLAY_FIXTURE_PHASE_55 : DISPLAY_FIXTURE;
     fs.writeFileSync(
       path.join(ontologyDir, 'coding.display.json'),
-      JSON.stringify(DISPLAY_FIXTURE, null, 2),
+      JSON.stringify(fixture, null, 2),
       'utf8',
     );
   }
@@ -232,5 +259,97 @@ describe('ontology /classes ?withDisplay=true (Plan 45-04 Task 1)', () => {
         expect(typeof d).toBe('string');
       }
     });
+  });
+});
+
+// Phase 55 Plan 02 Task 2 — handler response surfaces extended DisplayHint.
+//
+// 4 behavior tests per 55-02-PLAN.md Task 2 <behavior>:
+//   Plan-55-02 Handler Test 1: ?withDisplay=true with overlay carrying
+//     borderStyle + pulseRule → wire response includes those fields verbatim.
+//   Plan-55-02 Handler Test 2: ?withDisplay=true with overlay entry missing
+//     borderStyle / pulseRule → those fields are undefined in the wire response
+//     (handler does NOT default to 'solid' / null — renderer's job).
+//   Plan-55-02 Handler Test 3: BC — absent withDisplay still returns the
+//     legacy Array<string> shape verbatim (T-45-04-03 lock).
+//   Plan-55-02 Handler Test 4: strict-equal "true" check unchanged —
+//     ?withDisplay=TRUE (uppercase) returns the legacy shape (Phase 45 lock).
+describe('ontology /classes ?withDisplay=true with Phase 55 extended fields (Plan 55-02 Task 2)', () => {
+  let env: TestEnv;
+
+  beforeEach(async () => {
+    env = await buildEnv({ withDisplayFile: true, phase55Fixture: true });
+  });
+  afterEach(async () => {
+    await teardown(env);
+  });
+
+  test('Plan-55-02 Handler Test 1: overlay borderStyle + pulseRule surface in wire response', async () => {
+    const res = await request(env.app).get(
+      '/api/v1/ontology/classes?withDisplay=true',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+
+    const observation = res.body.data.find(
+      (c: { name: string }) => c.name === 'Observation',
+    );
+    expect(observation).toBeDefined();
+    expect(observation.display).toBeDefined();
+    // Phase 45 fields preserved
+    expect(observation.display.color).toBe('#10b981');
+    expect(observation.display.icon).toBe('📝');
+    expect(observation.display.shape).toBe('circle');
+    // Phase 55 fields surface
+    expect(observation.display.borderStyle).toBe('solid');
+    expect(observation.display.pulseRule).toBe('lastUpdatedWithin:60s');
+
+    const component = res.body.data.find(
+      (c: { name: string }) => c.name === 'Component',
+    );
+    expect(component).toBeDefined();
+    expect(component.display.borderStyle).toBe('solid');
+    // Explicit null pulseRule round-trips as null (not stripped)
+    expect(component.display.pulseRule).toBeNull();
+  });
+
+  test('Plan-55-02 Handler Test 2: overlay entry missing new fields → undefined on wire (no defaults)', async () => {
+    const res = await request(env.app).get(
+      '/api/v1/ontology/classes?withDisplay=true',
+    );
+    expect(res.status).toBe(200);
+    // Digest fixture deliberately omits borderStyle + pulseRule.
+    const digest = res.body.data.find(
+      (c: { name: string }) => c.name === 'Digest',
+    );
+    expect(digest).toBeDefined();
+    expect(digest.display).toBeDefined();
+    expect(digest.display.color).toBe('#f59e0b');
+    // Critically: handler does NOT default-fill these.
+    expect(digest.display.borderStyle).toBeUndefined();
+    expect(digest.display.pulseRule).toBeUndefined();
+  });
+
+  test('Plan-55-02 Handler Test 3: BC — absent withDisplay returns legacy Array<string>', async () => {
+    const res = await request(env.app).get('/api/v1/ontology/classes');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+    // T-45-04-03 byte-identical contract: every element is a string.
+    for (const d of res.body.data) {
+      expect(typeof d).toBe('string');
+    }
+  });
+
+  test('Plan-55-02 Handler Test 4: strict-equal "true" — ?withDisplay=TRUE (uppercase) returns BC shape', async () => {
+    const res = await request(env.app).get(
+      '/api/v1/ontology/classes?withDisplay=TRUE',
+    );
+    expect(res.status).toBe(200);
+    // Phase 45 strict-equal lock holds — uppercase TRUE → BC string-array.
+    for (const d of res.body.data) {
+      expect(typeof d).toBe('string');
+    }
   });
 });

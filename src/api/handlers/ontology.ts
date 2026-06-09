@@ -23,6 +23,19 @@
 //     byte-identical to the pre-Phase-45 contract — z.array(z.string()) per
 //     OKM rest-contract.test.ts:257. T-45-04-03 BC-regression mitigation.
 //
+// 2026-06-09 Phase 55 Plan 02 extension (55-02-PLAN.md, UI-SPEC §14):
+//   - The DisplayHint interface imported from ../../ontology/display-overlay.js
+//     now carries two additional optional fields:
+//       borderStyle?: 'solid' | 'dashed'
+//       pulseRule?: null | 'lastUpdatedWithin:60s' | 'lastUpdatedWithin:5m'
+//         | 'recentlyMerged:1h'
+//   - This handler is shape-agnostic — the spread `entry.display = hint`
+//     forwards whatever optional fields the loader returns; the renderer
+//     applies fallback rules (UI-SPEC §14: dashed for orphans, no pulse for
+//     undefined).
+//   - Strict-equal `"true"` BC gate at line ~141 stays unchanged; only the
+//     DisplayHint shape widens. T-45-04-03 lock preserved verbatim.
+//
 // Routes registered:
 //   GET /ontology/classes              — array of class name strings (BC)
 //   GET /ontology/classes?withDisplay=true — enriched objects (45-04)
