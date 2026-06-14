@@ -14,11 +14,14 @@
 // blocks, expect().toBe(true) assertions). Vitest, ES-module imports.
 
 import { describe, it, expect } from 'vitest';
-import { PROJECTS, isProject, type Project } from '../../src/index.js';
+// Task 1 imports the module directly to keep the test self-contained.
+// Task 2 wires the per-module + root barrels and appends a
+// root-barrel-reachability assertion to the bottom of this file.
+import { PROJECTS, isProject, type Project } from '../../src/types/project.js';
 
 // SC#4-style surface witness — touching the named exports at runtime
 // forces the import to be retained even with strict tree-shaking and
-// proves the root-barrel re-export landed.
+// proves the module exports landed.
 const _surfaceWitness: {
   projects: typeof PROJECTS;
   guard: typeof isProject;
