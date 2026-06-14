@@ -121,3 +121,23 @@ describe('Project type registry (Phase 57 D-03)', () => {
     });
   });
 });
+
+// Task 2 — root-barrel reachability gate.
+// Verifies the Phase 57 D-03 surface is reachable via `@fwornle/km-core`
+// (root barrel) AND `@fwornle/km-core/types` (sub-path), without going
+// through src/types/project.js directly. Locks the barrel wiring that
+// downstream writers (semantic-analysis, viewer, backfill) depend on.
+import * as rootBarrel from '../../src/index.js';
+import * as typesBarrel from '../../src/types/index.js';
+
+describe('Project barrel re-exports (Phase 57 Plan 01 Task 2)', () => {
+  it('exposes PROJECTS + isProject via the root barrel @fwornle/km-core', () => {
+    expect(rootBarrel.PROJECTS).toBe(PROJECTS);
+    expect(rootBarrel.isProject).toBe(isProject);
+  });
+
+  it('exposes PROJECTS + isProject via the types sub-barrel @fwornle/km-core/types', () => {
+    expect(typesBarrel.PROJECTS).toBe(PROJECTS);
+    expect(typesBarrel.isProject).toBe(isProject);
+  });
+});

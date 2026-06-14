@@ -30,6 +30,17 @@ export type {
 
 export type { EntityId } from './ids/branded.js';
 
+// Phase 57 D-03 — Project type registry (PROJECTS / Project / isProject).
+// Closed-set vocabulary for `metadata.project` stamped on every km-core
+// entity by Phase 57 writers (wave agents, canonical-mapper, km-core-adapter,
+// online-mapper, legacy-ingest, backfill). Adding a new project = code
+// change in src/types/project.ts + this file's consumers.
+//
+// Sub-path: `import { isProject } from '@fwornle/km-core/types';`
+// Root barrel: `import { isProject } from '@fwornle/km-core';`
+export { PROJECTS, isProject } from './types/project.js';
+export type { Project } from './types/project.js';
+
 // Store API public types (D-17 BatchOp, D-18 FilterObject).
 export type { BatchOp, FilterObject } from './store/types.js';
 
