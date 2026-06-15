@@ -95,17 +95,28 @@ export class PersistenceManager {
    * @see hydrateFromJsonExports for the fallback path.
    */
   async hydrate(): Promise<SerializedGraph | null> {
-    // Try LevelDB first (runtime cache)
+    // Phase 57-05 lesson: prefer JSON exports when they have MORE nodes than
+    // LevelDB. `persistGraph()` only fires on clean `close()`; an obs-api crash
+    // during shutdown (libc++abi mutex lock failure on SIGTERM) leaves LevelDB
+    // frozen at the prior clean state — sometimes days behind the JSON exports
+    // written by the exporter's 5s-debounced `scheduleExport`. Without this
+    // ordering, restart resurrects stale state over fresh JSON and the graph
+    // loses every adjacency written since the last clean shutdown.
+    // Coding-project regression on 2026-06-15: 1270/1594 → 924/3 after a
+    // backfill cycle that triggered obs-api respawns. Recovery required
+    // restoring the JSON snapshot AND wiping LevelDB AND re-applying this
+    // patch (Phase 57's `npm run build` had wiped the original 2026-06-11
+    // patch). Upstream fix: persistGraph should debounce-on-every-mutation.
+    let levelDbState: SerializedGraph | null = null;
+    let levelDbNodeCount = 0;
     try {
       await this.db.open();
       const data = await this.db.get('graph:state');
       if (data !== undefined && data !== null) {
-        return JSON.parse(data) as SerializedGraph;
+        levelDbState = JSON.parse(data) as SerializedGraph;
+        levelDbNodeCount = levelDbState?.nodes?.length ?? 0;
       }
     } catch (err: unknown) {
-      // classic-level does NOT export typed error classes — duck-typing on
-      // `err.code === 'LEVEL_NOT_FOUND'` is the canonical pattern (37-PATTERNS
-      // §Shared Patterns).
       if (
         !(err &&
           typeof err === 'object' &&
@@ -116,10 +127,17 @@ export class PersistenceManager {
       }
     }
 
-    // Fallback: merge per-domain JSON exports (git-tracked, may come from
-    // colleagues' runs that arrived via git pull). Source of truth when
-    // LevelDB is empty.
-    return this.hydrateFromJsonExports();
+    const jsonState = await this.hydrateFromJsonExports();
+    const jsonNodeCount = jsonState?.nodes?.length ?? 0;
+
+    if (jsonNodeCount > levelDbNodeCount) {
+      process.stderr.write(
+        `[km-core/persistence] hydrate: JSON has more nodes (${jsonNodeCount}) than LevelDB (${levelDbNodeCount}); preferring JSON\n`,
+      );
+      return jsonState;
+    }
+
+    return levelDbState ?? jsonState;
   }
 
   /**
