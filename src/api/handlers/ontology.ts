@@ -53,6 +53,14 @@ import type { ResolvedClass } from '../../types/ontology.js';
 import type { RouteDescriptor, KmCoreRouterOptions } from '../router.js';
 import { loadDisplayOverlay } from '../../ontology/display-overlay.js';
 import type { DisplayHint } from '../../ontology/display-overlay.js';
+// Phase 60.07 Task 2 — Path B (HIERARCHY_ROOTS synthesis). Internal import
+// from the SAME km-core types module (NOT '@fwornle/km-core' — would create
+// a self-referential dependency cycle during build). Plan 60-04 ships the
+// closed-set vocabulary; we read both the tuple and the lookup map.
+import { HIERARCHY_ROOTS, HIERARCHY_ROOT_CLASS } from '../../types/hierarchy-roots.js';
+// Surface witness — touched here so strict tree-shakers cannot eliminate the
+// import if only HIERARCHY_ROOT_CLASS is referenced by runtime code below.
+void HIERARCHY_ROOTS;
 
 interface RegistryLike {
   classCatalog: ReadonlyMap<string, ResolvedClass>;
@@ -199,13 +207,63 @@ export function ontologyRoutes(
         // surfaces it (lower files MAY include `level`/`parent` per
         // 45-UI-SPEC § Color "level, parent" hints). Cast-through to read
         // unknown extra fields without losing strict types upstream.
-        const extra = cls as unknown as { level?: number; parent?: string } | undefined;
+        const extra = cls as unknown as
+          | { level?: number; parent?: string }
+          | undefined;
         if (extra && typeof extra.level === 'number') entry.level = extra.level;
         if (extra && typeof extra.parent === 'string') entry.parent = extra.parent;
+        // Phase 60.07 D-3 — parent fallback from `extends`. When an L2 class
+        // ships `extends: <X>` but omits explicit `parent`, derive parent
+        // from extends so the viewer's L1→L2 group construction
+        // (OntologyFilter.tsx:457 `c.level === 2 && c.parent`) can match
+        // without requiring data-side duplication. Explicit `parent` always
+        // wins (Test 4 — `entry.parent !== undefined` after the line above
+        // short-circuits this fallback).
+        if (entry.parent === undefined && cls && typeof cls.extends === 'string') {
+          entry.parent = cls.extends;
+        }
         const hint = overlay[name];
         if (hint) entry.display = hint;
         return entry;
       });
+
+      // Phase 60.07 D-23 — Path B HIERARCHY_ROOTS synthesis for the coding
+      // system. The closed-set hierarchy roots (CollectiveKnowledge + 4
+      // project anchors) map to L0 anchor classes (System | Project) via
+      // HIERARCHY_ROOT_CLASS. The viewer's OntologyFilter renders L0 rows
+      // ungrouped at the top of the section — but only the anchor CLASS
+      // names need to appear in the registry response (not the individual
+      // root entity names). So we synthesize one entry per UNIQUE lockedClass
+      // value in HIERARCHY_ROOT_CLASS — typically {System, Project} — that
+      // is not already present in the enriched array (idempotency, Test 2).
+      //
+      // Synthesis is scoped to the configured coding system: if the host
+      // wired `displayOverlaySystem: 'coding'` (the standard obs-api bootstrap
+      // at scripts/observations-api-server.mjs:1396), we synthesize. For any
+      // other system identity (e.g. 'okb'), we skip — keeps Phase 60.04's
+      // single-source-of-truth scope from leaking into unrelated tabs.
+      if (overlaySystem === 'coding') {
+        const presentNames = new Set(enriched.map((e) => e.name));
+        const seenLockedClasses = new Set<'System' | 'Project'>();
+        const synthesized: Array<{
+          name: string;
+          level: number;
+        }> = [];
+        for (const root of HIERARCHY_ROOTS) {
+          const lockedClass = HIERARCHY_ROOT_CLASS[root];
+          if (seenLockedClasses.has(lockedClass)) continue;
+          seenLockedClasses.add(lockedClass);
+          if (presentNames.has(lockedClass)) continue;
+          synthesized.push({ name: lockedClass, level: 0 });
+        }
+        // Prepend so L0 anchors appear at the top of the array — the viewer's
+        // group construction also re-sorts but prepending is the friendlier
+        // default for any consumer that walks the array in wire order.
+        if (synthesized.length > 0) {
+          enriched.unshift(...synthesized);
+        }
+      }
+
       res.json({ success: true, data: enriched });
     },
   });
