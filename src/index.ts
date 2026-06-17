@@ -41,6 +41,19 @@ export type { EntityId } from './ids/branded.js';
 export { PROJECTS, isProject } from './types/project.js';
 export type { Project } from './types/project.js';
 
+// Phase 60 D-14 + D-23 — Hierarchy roots registry (HIERARCHY_ROOTS const
+// tuple, HierarchyRoot literal-union, HIERARCHY_ROOT_CLASS lookup map,
+// isHierarchyRoot runtime typeguard). Closed-set of entity names whose
+// `ontologyClass` is hard-locked at the writer + LLM-classifier boundary.
+// Consumed by the Phase 60 writer guard
+// (integrations/mcp-server-semantic-analysis/.../ontology-classification-agent.ts)
+// and the one-shot repair script (scripts/repair-ck-ontology-class.mjs).
+//
+// Sub-path: `import { isHierarchyRoot } from '@fwornle/km-core/types';`
+// Root barrel: `import { isHierarchyRoot } from '@fwornle/km-core';`
+export { HIERARCHY_ROOTS, HIERARCHY_ROOT_CLASS, isHierarchyRoot } from './types/hierarchy-roots.js';
+export type { HierarchyRoot } from './types/hierarchy-roots.js';
+
 // Store API public types (D-17 BatchOp, D-18 FilterObject).
 export type { BatchOp, FilterObject } from './store/types.js';
 
