@@ -119,6 +119,22 @@ export interface GraphKMStoreOptions {
    *  (re-throws) instead of skip+warn. Default false (atomic-build per
    *  D-29). Forwarded to `OntologyRegistry({ strict })`. */
   ontologyStrict?: boolean;
+  /** Whether `close()` writes the in-memory snapshot back to LevelDB.
+   *  Default `true` — every existing consumer keeps its current
+   *  behavior.
+   *
+   *  Pass `false` when the store is opened purely to READ. `persistGraph`
+   *  is a single `db.put('graph:state', JSON.stringify(graph))`, so a
+   *  read-only open that closes normally still rewrites the WHOLE graph
+   *  as one multi-megabyte value. A request-scoped open/read/close on a
+   *  polled HTTP route therefore appends a fresh ~8 MB SST every few
+   *  seconds, and LevelDB cannot compact a single hot key fast enough to
+   *  keep up: the coding project's experiment store reached 4,821 files /
+   *  4.6 GB backing a graph that exports to 8.3 MB, at which point
+   *  `open()` alone exceeded the container's 4 GiB cgroup limit and the
+   *  kernel OOM-killed the server on every poll (175 kills). Reads must
+   *  not write. */
+  persistOnClose?: boolean;
 }
 
 /**
@@ -140,10 +156,12 @@ export class GraphKMStore extends EventEmitter {
   private exporter: Exporter;
   private validator: OntologyValidator;
   private readonly registry: OntologyRegistry | undefined;
+  private readonly persistOnClose: boolean;
   private initialized = false;
 
   constructor(opts: GraphKMStoreOptions) {
     super();
+    this.persistOnClose = opts.persistOnClose ?? true;
     this.graph = new MultiDirectedGraph<Entity, Relation>();
     this.persistence = new PersistenceManager(opts.dbPath, opts.exportDir, {
       domains: opts.domains,
@@ -1126,10 +1144,17 @@ export class GraphKMStore extends EventEmitter {
    *   2. `await persistence.persistGraph(snapshot)` — durable LevelDB
    *      write of the final snapshot (the runtime cache).
    *   3. `await persistence.close()` — close the LevelDB handle.
+   *
+   * Step 2 is skipped when the store was constructed with
+   * `persistOnClose: false` (a read-only open — see the option's docs).
+   * Step 1 is kept unconditionally: `flush()` only writes when a
+   * mutation actually scheduled an export, so it is already a no-op on a
+   * pure read, and skipping it would silently drop a pending write if a
+   * caller ever passed the flag on a store it did mutate.
    */
   async close(): Promise<void> {
     await this.exporter.flush();
-    if (this.initialized) {
+    if (this.initialized && this.persistOnClose) {
       try {
         await this.persistence.persistGraph(
           this.graph.export() as SerializedGraph,
