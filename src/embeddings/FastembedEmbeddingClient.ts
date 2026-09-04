@@ -10,7 +10,7 @@
 //
 // SOURCE: model + cacheDir + queryEmbed pattern lifted from B's existing
 // embedding pipeline at
-//   /Users/Q284340/Agentic/coding/src/embedding/embedding-service.ts
+//   <coding-repo>/src/embedding/embedding-service.ts
 // which is the live, production-validated fastembed integration. Three
 // Phase 28 memory notes hold:
 //   - "Set absolute cacheDir in FlagEmbedding.init() to prevent

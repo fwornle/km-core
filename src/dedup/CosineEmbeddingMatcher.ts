@@ -2,7 +2,7 @@
 // layer (layer 2 of 3 per D-44 declared order).
 //
 // SOURCE: cosine math is a VERBATIM port from A's existing dedup script
-//   /Users/Q284340/Agentic/coding/scripts/dedup-insights-by-embedding.js
+//   <coding-repo>/scripts/dedup-insights-by-embedding.js
 //   lines 56-64 (the `cosine(a, b)` function).
 // Threshold semantics derive from A's three production thresholds
 // (`dedup-insights-by-embedding.js:39` = 0.93 for insight-dedup;
