@@ -50,7 +50,7 @@ npm test
 KM-Core consumes per-system ontology files; the `coding` system's ontology lives at `.data/ontologies/coding-ontology.json` (relative to the repo root). The tutorial entity is a `SubComponent` instance, so let's look at the `SubComponent` class definition.
 
 ```bash
-cd /Users/Q284340/Agentic/coding   # back to the outer repo root
+cd "${CODING_REPO:-../../..}"   # back to the outer repo root
 cat .data/ontologies/coding-ontology.json | jq '.classes.SubComponent'
 ```
 

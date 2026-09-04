@@ -11,7 +11,8 @@ set -euo pipefail
 
 # Step 1: extract the KB_PATTERN regex from the live hook (single source of
 # truth — if the hook changes, this test reflects reality).
-HOOK_PATH="/Users/Q284340/Agentic/coding/scripts/hooks/pre-commit-okb-guard.sh"
+CODING_ROOT="${CODING_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
+HOOK_PATH="$CODING_ROOT/scripts/hooks/pre-commit-okb-guard.sh"
 if [ ! -f "$HOOK_PATH" ]; then
   echo "FAIL: hook not found at $HOOK_PATH"
   exit 1
