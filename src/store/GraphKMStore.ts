@@ -877,15 +877,32 @@ export class GraphKMStore extends EventEmitter {
   /**
    * Find relations matching a partial filter. Linear scan over edges
    * (Graphology has no edge index in v0.26); CORE-02 v0.1 acceptable.
+   *
+   * `opts.withKey` attaches the graphology edge key to each result.
+   *
+   * OFF BY DEFAULT, and that is not timidity — the key changes what callers
+   * DO with the result. `addRelation` branches on `r.key`: given one it calls
+   * `addDirectedEdgeWithKey` and silently swallows a duplicate-key error. So a
+   * caller that reads edges and writes them back — `mergeEntities` re-points
+   * a duplicate's edges at the survivor — would re-add each rewritten edge
+   * under the ORIGINAL edge's key, hit the duplicate, and drop the edge on the
+   * floor. Only callers that need to ADDRESS an edge should ask for its key.
+   *
+   * The attached key is on a COPY. `getEdgeAttributes` hands back the live
+   * attribute object, so writing to it would persist a `key` field into every
+   * edge in the exported graph.
    */
-  async findRelations(filter: Partial<Relation>): Promise<Relation[]> {
-    const matches: Relation[] = [];
+  async findRelations(
+    filter: Partial<Relation>,
+    opts: { withKey?: boolean } = {},
+  ): Promise<Array<Relation & { key?: string }>> {
+    const matches: Array<Relation & { key?: string }> = [];
     for (const edgeId of this.graph.edges()) {
       const r = this.graph.getEdgeAttributes(edgeId) as Relation;
       if (filter.type !== undefined && r.type !== filter.type) continue;
       if (filter.from !== undefined && r.from !== filter.from) continue;
       if (filter.to !== undefined && r.to !== filter.to) continue;
-      matches.push(r);
+      matches.push(opts.withKey ? { ...r, key: edgeId } : r);
     }
     return matches;
   }

@@ -39,7 +39,13 @@ export function relationRoutes(
       if (fromQ) filter.from = fromQ as EntityId;
       if (toQ) filter.to = toQ as EntityId;
       if (typeQ) filter.type = typeQ;
-      const relations = await store.findRelations(filter);
+      // withKey: the emitted `key` is what DELETE /relations/:key looks up.
+      // Without it relationToWire synthesizes `<from>|<to>|<type>`, which only
+      // matches edges that were added WITH that key — every edge created
+      // through POST /relations gets a graphology `geid_…` id instead, so the
+      // delete route 404'd on the majority of the graph while handing the
+      // caller a key that looked entirely plausible.
+      const relations = await store.findRelations(filter, { withKey: true });
       res.json({
         success: true,
         // 44-CONTEXT-amendment.md: emit graphology edge envelope per OKM
