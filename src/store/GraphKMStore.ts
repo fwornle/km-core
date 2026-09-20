@@ -347,6 +347,38 @@ export class GraphKMStore extends EventEmitter {
   ): Promise<EntityId> {
     const trusted = opts?.skipOntologyCheck === true;
 
+    // IS-A invariant: `ontologyClass` must be `entityType` itself or one of
+    // its ancestors. A row saying "I am a Detail" while being an Observation
+    // lies to everything that reasons over class.
+    //
+    // This runs on the TRUSTED PATH TOO, deliberately. `skipOntologyCheck` is
+    // the bulk-import escape hatch, and it was the hatch every one of the 325
+    // Observation→Detail violations came through: ObservationWriter passes it
+    // on every write. A guard that exempts the trusted path would have caught
+    // none of the damage it exists to prevent.
+    //
+    // It is narrow on purpose, so it cannot break round-trip fixtures:
+    // it fires only when a registry is loaded AND both fields are present AND
+    // both name classes the registry knows. Unknown or absent classes are
+    // someone else's problem (the D-19 validator's) — ignorance fails open,
+    // a provable contradiction fails closed.
+    if (this.registry && e.entityType && e.ontologyClass) {
+      const et = e.entityType;
+      const oc = e.ontologyClass as string;
+      if (
+        et !== oc &&
+        this.registry.getClass(et) !== undefined &&
+        this.registry.getClass(oc) !== undefined &&
+        !this.registry.parentChainOf(et).some((c) => c.name === oc)
+      ) {
+        throw new Error(
+          `putEntity: ontologyClass '${oc}' is not entityType '${et}' nor one of its ancestors ` +
+            `(entity '${e.name}'). Set ontologyClass to the class the row IS; put what it is ` +
+            `ABOUT in metadata (e.g. metadata.subsystem).`,
+        );
+      }
+    }
+
     // D-19 validation — skipped on the trusted path.
     if (!trusted) {
       this.validator.validate(e.entityType);

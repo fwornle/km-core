@@ -1263,3 +1263,107 @@ describe('findByContentHash / findRecentByAgent (Phase 44 Plan 13)', () => {
     expect(digs[0].name).toBe('dig');
   });
 });
+
+// ---------------------------------------------------------------------------
+// IS-A invariant on putEntity (2026-09-20)
+//
+// `ontologyClass` must be `entityType` itself or one of its ancestors. The
+// coding graph accumulated 325 rows claiming to be a `Detail` while being an
+// `Observation`, and every consumer that reasons over class was reading that.
+//
+// The case that matters most here is `skipOntologyCheck: true`: that is the
+// path ObservationWriter uses for every write, so it is the path the damage
+// came through. A guard that exempted it would be decorative.
+// ---------------------------------------------------------------------------
+describe('putEntity IS-A invariant (ontologyClass vs entityType)', () => {
+  const ONTOLOGY_DIR = path.join(import.meta.dirname, '../fixtures/ontology');
+  let c: Ctx;
+
+  beforeEach(async () => {
+    c = makeStore({ ontologyDir: ONTOLOGY_DIR });
+    await c.store.open();
+  });
+
+  afterEach(async () => {
+    await c.store.close();
+    fs.rmSync(c.tmpdir, { recursive: true, force: true });
+  });
+
+  test('accepts ontologyClass equal to entityType', async () => {
+    const id = await c.store.putEntity(
+      { name: 'same', entityType: 'Component', ontologyClass: 'Component' },
+      { skipOntologyCheck: true },
+    );
+    expect((await c.store.getEntity(id))!.ontologyClass).toBe('Component');
+  });
+
+  test('accepts ontologyClass that is an ANCESTOR of entityType', async () => {
+    // fixtures: LiveLoggingSystem extends Component.
+    const id = await c.store.putEntity(
+      { name: 'ancestor', entityType: 'LiveLoggingSystem', ontologyClass: 'Component' },
+      { skipOntologyCheck: true },
+    );
+    expect((await c.store.getEntity(id))!.entityType).toBe('LiveLoggingSystem');
+  });
+
+  test('accepts a TRANSITIVE ancestor, not just the direct parent', async () => {
+    // fixtures: ManualLearning -> KnowledgeManagement -> Component.
+    const id = await c.store.putEntity(
+      { name: 'transitive', entityType: 'ManualLearning', ontologyClass: 'Component' },
+      { skipOntologyCheck: true },
+    );
+    expect((await c.store.getEntity(id))!.entityType).toBe('ManualLearning');
+  });
+
+  test('REJECTS a class that is neither self nor ancestor', async () => {
+    await expect(
+      c.store.putEntity(
+        { name: 'sibling', entityType: 'LiveLoggingSystem', ontologyClass: 'Service' },
+        { skipOntologyCheck: true },
+      ),
+    ).rejects.toThrow(/is not entityType 'LiveLoggingSystem' nor one of its ancestors/);
+  });
+
+  test('rejects on the trusted path — that is where the real writes go', async () => {
+    // The whole point: skipOntologyCheck must NOT buy an exemption here.
+    await expect(
+      c.store.putEntity(
+        { name: 'trusted', entityType: 'Pipeline', ontologyClass: 'DataAsset' },
+        { skipOntologyCheck: true },
+      ),
+    ).rejects.toThrow(/nor one of its ancestors/);
+  });
+
+  test('fails OPEN when a class is unknown to the registry', async () => {
+    // Ignorance is the D-19 validator's business, not this invariant's. An
+    // unregistered class must not become an unwritable row.
+    const id = await c.store.putEntity(
+      { name: 'unknown', entityType: 'NotInAnyOntology', ontologyClass: 'Component' },
+      { skipOntologyCheck: true },
+    );
+    expect((await c.store.getEntity(id))!.name).toBe('unknown');
+  });
+
+  test('fails OPEN when no registry is loaded at all', async () => {
+    const bare = makeStore(); // no ontologyDir
+    await bare.store.open();
+    try {
+      const id = await bare.store.putEntity(
+        { name: 'no-registry', entityType: 'Observation', ontologyClass: 'Detail' },
+        { skipOntologyCheck: true },
+      );
+      expect((await bare.store.getEntity(id))!.ontologyClass).toBe('Detail');
+    } finally {
+      await bare.store.close();
+      fs.rmSync(bare.tmpdir, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores the invariant when ontologyClass is absent', async () => {
+    const id = await c.store.putEntity(
+      { name: 'no-class', entityType: 'Component' },
+      { skipOntologyCheck: true },
+    );
+    expect((await c.store.getEntity(id))!.entityType).toBe('Component');
+  });
+});
