@@ -22,7 +22,7 @@
 // no-console-log: this module emits no diagnostics.
 
 import type { GraphKMStore } from '../../store/GraphKMStore.js';
-import type { Entity, Relation } from '../../types/entity.js';
+import type { Entity, Relation, EntityProvenance } from '../../types/entity.js';
 import type { EntityId } from '../../ids/branded.js';
 import type { RouteDescriptor, KmCoreRouterOptions } from '../router.js';
 import {
@@ -414,6 +414,78 @@ export function queryRoutes(
       res.json({
         success: true,
         data: orphans.map((e) => entityToWire(e)),
+      });
+    },
+  });
+
+  // GET /graph/runs — provenance runs, newest activity first.
+  //
+  // "Which run captured this" was the one question provenance existed to
+  // answer and the only one it could not. Not because the data was missing —
+  // every writer stamps a `runId` and the store held 495 distinct ones — but
+  // because nothing exposed it and the wire serializer dropped it for the
+  // 1,409 rows written through the trusted path (fixed in
+  // wire-serializers.ts). This is the read side of that.
+  //
+  // Deliberately NOT modelled as graph nodes. `runId` is regenerated per
+  // writer PROCESS, so a node per run would mint one on every service restart,
+  // forever, to encode a field that already exists on the entity.
+  //
+  // ?limit caps the returned rows (default 100); counts are over every active
+  // entity regardless, so `total` never depends on the page size.
+  routes.push({
+    method: 'get',
+    path: '/graph/runs',
+    handler: async (req, res) => {
+      interface RunRow {
+        runId: string;
+        provider?: string;
+        model?: string;
+        entities: number;
+        firstSeen?: string;
+        lastSeen?: string;
+      }
+      const runs = new Map<string, RunRow>();
+      // Iterate the way GET /entities does, NOT graph.forEachNode. The raw
+      // node walk includes retired/superseded rows that `/entities` filters
+      // out, so a run's reported count would exceed what `?runId=` can
+      // return — measured as 705 vs 651 on the migration run before this was
+      // corrected. A count you cannot retrieve is a bug report waiting to
+      // happen, so both sides now see exactly the same population.
+      for await (const e of store.iterate()) {
+        const wire = entityToWire(e);
+        const prov = (wire.metadata as Record<string, unknown> | undefined)?.provenance as
+          | EntityProvenance
+          | undefined;
+        const stamp = prov?.createdBy;
+        if (!stamp?.runId) continue;
+        const cur: RunRow = runs.get(stamp.runId) ?? {
+          runId: stamp.runId,
+          provider: stamp.provider,
+          model: stamp.model,
+          entities: 0,
+        };
+        cur.entities += 1;
+        const ts = stamp.timestamp;
+        if (ts) {
+          if (!cur.firstSeen || ts < cur.firstSeen) cur.firstSeen = ts;
+          if (!cur.lastSeen || ts > cur.lastSeen) cur.lastSeen = ts;
+        }
+        runs.set(stamp.runId, cur);
+      }
+
+      const limitRaw = Number(req.query?.limit);
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 100;
+      const all = [...runs.values()].sort((a, b) =>
+        (b.lastSeen ?? '').localeCompare(a.lastSeen ?? ''),
+      );
+      res.json({
+        success: true,
+        data: {
+          total: all.length,
+          entitiesWithProvenance: all.reduce((n, r) => n + r.entities, 0),
+          runs: all.slice(0, limit),
+        },
       });
     },
   });

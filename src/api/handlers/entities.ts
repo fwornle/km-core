@@ -70,6 +70,21 @@ export function entityRoutes(
         }
       }
 
+      // ?runId= — the entities a given provenance run wrote. Filtered BEFORE
+      // the limit so a run's row count is not silently clipped by the default
+      // 1000 cap. Reads the same wire-shape provenance /graph/runs lists, so
+      // the two can never disagree about which rows belong to a run.
+      const runId = (req.query?.runId as string | undefined) ?? undefined;
+      if (runId) {
+        all = all.filter((e) => {
+          const wire = entityToWire(e);
+          const prov = (wire.metadata as Record<string, unknown> | undefined)?.provenance as
+            | { createdBy?: { runId?: string } }
+            | undefined;
+          return prov?.createdBy?.runId === runId;
+        });
+      }
+
       // Default LIMIT (T-44-06-04): clip to 1000 if no caller limit AND large.
       let effectiveLimit = hasCallerLimit ? callerLimit : 0;
       if (!hasCallerLimit && all.length > 1000) {

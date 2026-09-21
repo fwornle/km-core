@@ -88,14 +88,24 @@ export function entityToWire(e: Entity): EntityWire {
       | EntityProvenance['lastConfirmedBy']
       | undefined;
     const confirmationCountT = eRec.confirmationCount as number | undefined;
-    if (createdByT !== undefined && lastConfirmedByT !== undefined) {
-      // Build provenance object only when all required fields are present;
-      // partial provenance would fail downstream Zod parse against the
-      // EntityProvenanceSchema (createdBy + lastConfirmedBy + count all required).
+    // `createdBy` ALONE is enough. Requiring both fields silently dropped the
+    // provenance of every entity written through the trusted path: the store's
+    // D-30/D-32 assembly (which is what sets `lastConfirmedBy`) does not run
+    // when `skipOntologyCheck: true`, and `legacy-ingest` stamps only
+    // `createdBy`. Measured 2026-09-21: 1,409 of 2,667 nodes carried a
+    // top-level `createdBy` and NO `metadata.provenance`, so their `runId`
+    // — the answer to "which run captured this" — existed on the node and
+    // never reached a single API consumer.
+    //
+    // When only `createdBy` is known, it IS the last confirmation: the row has
+    // been written exactly once as far as the stamp records, so mirroring it
+    // into `lastConfirmedBy` with a count of 1 is the truthful reading rather
+    // than an invention. The Zod shape stays satisfied either way.
+    if (createdByT !== undefined) {
       outMeta.provenance = {
         createdBy: createdByT,
-        lastConfirmedBy: lastConfirmedByT,
-        confirmationCount: confirmationCountT ?? 0,
+        lastConfirmedBy: lastConfirmedByT ?? createdByT,
+        confirmationCount: confirmationCountT ?? (lastConfirmedByT ? 0 : 1),
       } satisfies EntityProvenance;
     }
   }
