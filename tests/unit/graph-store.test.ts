@@ -194,6 +194,79 @@ describe('GraphKMStore', () => {
     expect(await ctx.store.findRelations({ from: a })).toHaveLength(0);
   });
 
+  test('addRelation is idempotent on (from, to, type)', async () => {
+    const a = await ctx.store.putEntity(
+      { name: 'DupA', entityType: 'Component' },
+      { provenance: PROV },
+    );
+    const b = await ctx.store.putEntity(
+      { name: 'DupB', entityType: 'SubComponent' },
+      { provenance: PROV },
+    );
+    await ctx.store.addRelation({ type: 'contains', from: a, to: b });
+    await ctx.store.addRelation({ type: 'contains', from: a, to: b });
+    await ctx.store.addRelation({ type: 'contains', from: a, to: b });
+    expect(await ctx.store.findRelations({ from: a, to: b, type: 'contains' })).toHaveLength(1);
+  });
+
+  test('a different type between the same pair is still its own edge', async () => {
+    const a = await ctx.store.putEntity(
+      { name: 'DupC', entityType: 'Component' },
+      { provenance: PROV },
+    );
+    const b = await ctx.store.putEntity(
+      { name: 'DupD', entityType: 'SubComponent' },
+      { provenance: PROV },
+    );
+    await ctx.store.addRelation({ type: 'contains', from: a, to: b });
+    await ctx.store.addRelation({ type: 'mentions', from: a, to: b });
+    expect(await ctx.store.findRelations({ from: a, to: b })).toHaveLength(2);
+  });
+
+  test('a repeat write keeps the original createdAt but takes the new runId', async () => {
+    const a = await ctx.store.putEntity(
+      { name: 'DupE', entityType: 'Component' },
+      { provenance: PROV },
+    );
+    const b = await ctx.store.putEntity(
+      { name: 'DupF', entityType: 'SubComponent' },
+      { provenance: PROV },
+    );
+    await ctx.store.addRelation({
+      type: 'contains',
+      from: a,
+      to: b,
+      metadata: { createdAt: '2026-01-01T00:00:00.000Z', runId: 'first', weight: 1 },
+    });
+    await ctx.store.addRelation({
+      type: 'contains',
+      from: a,
+      to: b,
+      metadata: { createdAt: '2026-09-21T00:00:00.000Z', runId: 'second' },
+    });
+    const [edge] = await ctx.store.findRelations({ from: a, to: b, type: 'contains' });
+    const meta = (edge.metadata ?? {}) as Record<string, unknown>;
+    // First-seen provenance survives; the newest run is what confirmed it.
+    expect(meta.createdAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(meta.runId).toBe('second');
+    // A field only the first write carried is not dropped by the merge.
+    expect(meta.weight).toBe(1);
+  });
+
+  test('allowDuplicate still represents data that already has duplicates', async () => {
+    const a = await ctx.store.putEntity(
+      { name: 'DupG', entityType: 'Component' },
+      { provenance: PROV },
+    );
+    const b = await ctx.store.putEntity(
+      { name: 'DupH', entityType: 'SubComponent' },
+      { provenance: PROV },
+    );
+    await ctx.store.addRelation({ type: 'contains', from: a, to: b });
+    await ctx.store.addRelation({ type: 'contains', from: a, to: b }, { allowDuplicate: true });
+    expect(await ctx.store.findRelations({ from: a, to: b, type: 'contains' })).toHaveLength(2);
+  });
+
   test('removeRelationByKey drops the edge and schedules the export', async () => {
     const a = await ctx.store.putEntity(
       { name: 'DurA', entityType: 'Component' },
