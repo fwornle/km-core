@@ -51,10 +51,24 @@ import type { EmbeddingClient } from '../dedup/CosineEmbeddingMatcher.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-/** Package-root default cache dir; callers override via opts.cacheDir. */
-const DEFAULT_CACHE_DIR = resolve(
-  join(__dirname, '..', '..', '.fastembed-cache'),
-);
+/**
+ * Where the ~80MB ONNX weights live. Precedence: `opts.cacheDir`, then
+ * `KM_FASTEMBED_CACHE_DIR`, then a dir under the package root.
+ *
+ * The env override mirrors `KM_ONTOLOGY_DIR` (see ontology/defaultDir.ts) and
+ * exists for the same reason: a consumer that does not pass the option gets a
+ * package-root path that is almost never where the model actually is, and
+ * fastembed's response to a missing model is to DOWNLOAD it. On a machine
+ * behind a corporate proxy that download fails as a bare `AggregateError`
+ * with an empty message — no URL, no status, nothing pointing at the cache
+ * dir. The weights were on disk the whole time, twice, under two different
+ * paths a caller had hardcoded.
+ *
+ * With the override, one setting points every consumer at one copy.
+ */
+const DEFAULT_CACHE_DIR =
+  process.env.KM_FASTEMBED_CACHE_DIR ||
+  resolve(join(__dirname, '..', '..', '.fastembed-cache'));
 
 /**
  * Pluggable fastembed initializer — defaults to `FlagEmbedding.init`. Used

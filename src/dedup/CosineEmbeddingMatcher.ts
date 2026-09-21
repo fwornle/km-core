@@ -79,6 +79,23 @@ export interface CosineEmbeddingMatcherOpts {
    * `ObservationConsolidator.js:243` shape. Override for surfaces where
    * a different serialization clusters better (e.g., bag-of-fields,
    * name-only).
+   *
+   * MIND THE MODEL'S WINDOW. The default concatenation is only sensible
+   * while `name + description` fits what the embedder actually reads.
+   * `FastembedEmbeddingClient` pins all-MiniLM-L6-v2, whose window is ~256
+   * tokens (~1k characters); anything past that is silently dropped, with no
+   * error and no warning.
+   *
+   * Measured on the consuming repo's Insight corpus (2026-09-21): median
+   * description length 2,354 characters, p90 15,953. Every row therefore
+   * embedded its truncated boilerplate preamble instead of its content, and
+   * the layer inverted — unrelated insights scored 0.99+ while a genuine
+   * near-duplicate pair scored 0.970, so RAISING the threshold made precision
+   * worse. Switching `textOf` to name-only took that corpus from 93 matches
+   * (mostly false) to 12 (mostly true) at the same 0.90 threshold.
+   *
+   * The lesson generalises: when documents outrun the window, feed this the
+   * short distinctive field, not the long one.
    */
   textOf?: (e: Entity) => string;
 }

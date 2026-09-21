@@ -193,3 +193,57 @@ describe('FastembedEmbeddingClient (Phase 42 D-52c)', () => {
     expect(fs.existsSync(subBarrelPath)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// KM_FASTEMBED_CACHE_DIR (2026-09-21)
+//
+// Without an env override every consumer had to hardcode the weights path,
+// and two of them in the consuming repo hardcoded DIFFERENT paths — two copies
+// of the same 80MB model. A consumer that passed nothing got a package-root
+// dir that was empty, and fastembed's answer to a missing model is to download
+// it: behind a corporate proxy that surfaces as a bare AggregateError with an
+// empty message, naming neither a URL nor the cache dir it was looking in.
+//
+// Precedence mirrors KM_ONTOLOGY_DIR: explicit option beats env beats default.
+// ---------------------------------------------------------------------------
+describe('FastembedEmbeddingClient cache-dir resolution', () => {
+  const ENV_KEY = 'KM_FASTEMBED_CACHE_DIR';
+  const saved = process.env[ENV_KEY];
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = saved;
+    vi.resetModules();
+  });
+
+  async function cacheDirSeenBy(opts: Record<string, unknown>): Promise<string> {
+    // Re-import so the module-level default is recomputed against the env
+    // as it stands for THIS test.
+    vi.resetModules();
+    const mod = await import('../../../src/embeddings/FastembedEmbeddingClient.js');
+    const initSpy = vi.fn(async () => makeStubFlagEmbedding());
+    const client = new mod.FastembedEmbeddingClient({ initializer: initSpy, ...opts });
+    await client.embed('x');
+    try { await client.close(); } catch { /* stub holds nothing */ }
+    return (initSpy.mock.calls[0][0] as { cacheDir: string }).cacheDir;
+  }
+
+  test('honours KM_FASTEMBED_CACHE_DIR when no option is passed', async () => {
+    process.env[ENV_KEY] = '/tmp/km-core-weights-from-env';
+    expect(await cacheDirSeenBy({})).toBe('/tmp/km-core-weights-from-env');
+  });
+
+  test('opts.cacheDir still wins over the env var', async () => {
+    process.env[ENV_KEY] = '/tmp/km-core-weights-from-env';
+    expect(await cacheDirSeenBy({ cacheDir: '/tmp/km-core-weights-explicit' })).toBe(
+      '/tmp/km-core-weights-explicit',
+    );
+  });
+
+  test('falls back to an absolute package-root path when neither is set', async () => {
+    delete process.env[ENV_KEY];
+    const dir = await cacheDirSeenBy({});
+    expect(path.isAbsolute(dir)).toBe(true);
+    expect(dir.endsWith('.fastembed-cache')).toBe(true);
+  });
+});
