@@ -886,12 +886,41 @@ export class GraphKMStore extends EventEmitter {
    */
   async addRelation(
     r: Relation & { key?: string },
+    opts: { allowSelfReference?: boolean } = {},
   ): Promise<void> {
     if (!this.graph.hasNode(r.from)) {
       throw new Error(`Source node not found: ${String(r.from)}`);
     }
     if (!this.graph.hasNode(r.to)) {
       throw new Error(`Target node not found: ${String(r.to)}`);
+    }
+    // No entity contains, or relates to, itself. A self-edge is a provable
+    // contradiction rather than an ambiguous one, so it fails closed here —
+    // the same call the IS-A guard makes at `putEntity`.
+    //
+    // This is not hypothetical: the live store carried 49 of them (28
+    // `contains`, 21 `related_to`) from the 2026-06-10 legacy edge backfill,
+    // which faithfully copied 51 self-loops that were already in the
+    // 2026-05-24 export. Nothing rejected them on the way in, nothing
+    // asserted against them afterwards, and they were found only because a
+    // parent-description readback could not tell a self-parent from a bug.
+    //
+    // Safe for the one caller that can legitimately produce from === to:
+    // `mergeEntities` rewires a duplicate's edges onto the survivor and
+    // ALREADY drops a self-loop before emitting the op (mergeEntities.ts,
+    // "Self-loop after rewire — drop the original without a replacement"),
+    // so it never reaches this throw.
+    //
+    // `allowSelfReference` exists for ONE purpose: faithfully representing
+    // data that already contains self-loops — restoring a snapshot, or a test
+    // seeding the historical shape whose cleanup it asserts. It is off by
+    // default and must never be passed to write a NEW edge. It does not
+    // weaken the guard for any producer, and the graph_integrity assertion
+    // counts self-edges however they arrived.
+    if (r.from === r.to && !opts.allowSelfReference) {
+      throw new Error(
+        `Self-referential relation refused: '${String(r.type)}' from ${String(r.from)} to itself`,
+      );
     }
     if (r.key !== undefined && r.key !== null) {
       try {
@@ -904,6 +933,34 @@ export class GraphKMStore extends EventEmitter {
     }
     this.emit('relation:added', { relation: r });
     this.exporter.scheduleExport(this.graph.export() as SerializedGraph);
+  }
+
+  /**
+   * Remove one relation by its Graphology edge key.
+   *
+   * Returns false when the key is unknown, so a caller can answer 404 without
+   * reaching into the graph to check first.
+   *
+   * THIS EXISTS BECAUSE THE DELETE ROUTE WAS NOT DURABLE. It reached through
+   * a cast to call `graph.dropEdge` directly and never scheduled an export, so
+   * every deletion lived in memory only and came back on the next restart —
+   * silently, because the read-back immediately after the delete is served
+   * from the same in-memory graph and looks correct. That is how a repair pass
+   * deleted 49 self-referential edges, verified 0 remaining, and found all 49
+   * present again after an obs-api restart.
+   *
+   * `batch()` was never affected: it schedules an export after applying its
+   * ops, so `mergeEntities` rewires persist.
+   *
+   * Emits `relation:removed` and schedules the export, matching `addRelation`.
+   */
+  async removeRelationByKey(key: string): Promise<boolean> {
+    if (!this.graph.hasEdge(key)) return false;
+    const r = this.graph.getEdgeAttributes(key) as Relation;
+    this.graph.dropEdge(key);
+    this.emit('relation:removed', { relation: r });
+    this.exporter.scheduleExport(this.graph.export() as SerializedGraph);
+    return true;
   }
 
   /**

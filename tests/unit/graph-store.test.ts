@@ -170,6 +170,71 @@ describe('GraphKMStore', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  test('addRelation refuses a self-referential edge', async () => {
+    const a = await ctx.store.putEntity(
+      { name: 'SelfLoop', entityType: 'SubComponent' },
+      { provenance: PROV },
+    );
+    await expect(
+      ctx.store.addRelation({ type: 'contains', from: a, to: a }),
+    ).rejects.toThrow(/Self-referential relation refused/);
+  });
+
+  test('a refused self-edge is not persisted and emits nothing', async () => {
+    const a = await ctx.store.putEntity(
+      { name: 'SelfLoop2', entityType: 'SubComponent' },
+      { provenance: PROV },
+    );
+    const handler = vi.fn();
+    ctx.store.on('relation:added', handler);
+    await expect(
+      ctx.store.addRelation({ type: 'related_to', from: a, to: a }),
+    ).rejects.toThrow();
+    expect(handler).not.toHaveBeenCalled();
+    expect(await ctx.store.findRelations({ from: a })).toHaveLength(0);
+  });
+
+  test('removeRelationByKey drops the edge and schedules the export', async () => {
+    const a = await ctx.store.putEntity(
+      { name: 'DurA', entityType: 'Component' },
+      { provenance: PROV },
+    );
+    const b = await ctx.store.putEntity(
+      { name: 'DurB', entityType: 'SubComponent' },
+      { provenance: PROV },
+    );
+    await ctx.store.addRelation({ type: 'contains', from: a, to: b, key: 'e1' });
+
+    // The export is what makes a deletion survive a restart. Dropping the edge
+    // without scheduling one is the bug this pins: the in-memory read-back
+    // looks correct and the edge returns on the next hydrate.
+    const spy = vi.spyOn(
+      (ctx.store as unknown as { exporter: { scheduleExport: (s: unknown) => void } }).exporter,
+      'scheduleExport',
+    );
+
+    expect(await ctx.store.removeRelationByKey('e1')).toBe(true);
+    expect(await ctx.store.findRelations({ from: a })).toHaveLength(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test('removeRelationByKey reports an unknown key instead of throwing', async () => {
+    expect(await ctx.store.removeRelationByKey('nope')).toBe(false);
+  });
+
+  test('the guard does not touch an ordinary edge between two entities', async () => {
+    const a = await ctx.store.putEntity(
+      { name: 'Parent', entityType: 'Component' },
+      { provenance: PROV },
+    );
+    const b = await ctx.store.putEntity(
+      { name: 'Child', entityType: 'SubComponent' },
+      { provenance: PROV },
+    );
+    await ctx.store.addRelation({ type: 'contains', from: a, to: b });
+    expect(await ctx.store.findRelations({ from: a })).toHaveLength(1);
+  });
+
   test('findByOntologyClass returns only entities matching the class', async () => {
     await ctx.store.putEntity(
       {
