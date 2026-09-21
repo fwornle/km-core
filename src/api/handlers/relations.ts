@@ -70,6 +70,17 @@ export function relationRoutes(
           });
           return;
         }
+        // Self-edge: a malformed request, not a server fault. `addRelation`
+        // throws for every caller regardless — this exists so the REST surface
+        // answers 400 rather than letting the store's throw surface as a 500,
+        // which would read as "km-core broke" instead of "you sent a bad edge".
+        if (body.from === body.to) {
+          res.status(400).json({
+            success: false,
+            error: `Self-referential relation refused: '${String(relationType)}' from ${String(body.from)} to itself`,
+          });
+          return;
+        }
         const relation: Relation = {
           from: body.from as EntityId,
           to: body.to as EntityId,
@@ -95,22 +106,15 @@ export function relationRoutes(
           res.status(400).json({ success: false, error: 'key is required' });
           return;
         }
-        // Access the underlying graph via the public iterator surface. The
-        // store does not expose dropEdge directly; reach through `graph` via
-        // a cast — internal library boundary acceptable for the REST layer
-        // colocated in the same package.
-        const graph = (store as unknown as { graph: { hasEdge: (k: string) => boolean; getEdgeAttributes: (k: string) => Relation; dropEdge: (k: string) => void } }).graph;
-        if (!graph.hasEdge(key)) {
+        // Durability lives in the store: removeRelationByKey drops the edge,
+        // emits relation:removed AND schedules the export. This route used to
+        // cast through to `graph.dropEdge` itself and skip that last step, so
+        // deletions were in-memory only and returned on the next restart.
+        const removed = await store.removeRelationByKey(key);
+        if (!removed) {
           res.status(404).json({ success: false, error: 'Relation not found' });
           return;
         }
-        const attrs = graph.getEdgeAttributes(key);
-        graph.dropEdge(key);
-        // Emit through the store's EventEmitter surface for downstream sync.
-        (store as unknown as { emit: (event: string, payload: unknown) => void }).emit(
-          'relation:removed',
-          { relation: attrs },
-        );
         res.json({ success: true, data: { deleted: true, key } });
       },
     });

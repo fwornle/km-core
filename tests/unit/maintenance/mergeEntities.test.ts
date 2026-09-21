@@ -529,12 +529,19 @@ describe('mergeEntities (Phase 41 Plan 05)', () => {
       // D1 -> D1 self-loop (returned by BOTH findRelations({from: d1Id})
       // AND findRelations({to: d1Id})). Without identity-key dedup, this
       // would emit TWO removeRelation BatchOps and double-count.
-      await ctx.store.addRelation({
-        type: 'self-ref',
-        from: d1Id,
-        to: d1Id,
-        createdAt: '2026-05-22T07:00:00.000Z',
-      });
+      // allowSelfReference: this seeds the HISTORICAL shape whose cleanup the
+      // test asserts. addRelation refuses a self-edge on the normal path; the
+      // live store still carried 49 of them from a 2026-06 legacy backfill,
+      // which is exactly the case merge has to handle.
+      await ctx.store.addRelation(
+        {
+          type: 'self-ref',
+          from: d1Id,
+          to: d1Id,
+          createdAt: '2026-05-22T07:00:00.000Z',
+        },
+        { allowSelfReference: true },
+      );
 
       const result = await mergeEntities(
         ctx.store,
