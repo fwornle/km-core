@@ -878,6 +878,10 @@ export class GraphKMStore extends EventEmitter {
    * exist in the graph (caller is responsible for the put-before-add
    * ordering — Phase 38's bulk loader will refine this).
    *
+   * Idempotent on the (from, to, type) triple: a repeat write merges its
+   * metadata into the existing edge instead of adding a parallel one. Pass
+   * `allowDuplicate` only to represent data that already contains duplicates.
+   *
    * If `r.key` (extended Relation field) is supplied, it is used as
    * the edge key verbatim — round-trip parity from fixture imports
    * relies on this. Otherwise Graphology generates a key.
@@ -886,7 +890,7 @@ export class GraphKMStore extends EventEmitter {
    */
   async addRelation(
     r: Relation & { key?: string },
-    opts: { allowSelfReference?: boolean } = {},
+    opts: { allowSelfReference?: boolean; allowDuplicate?: boolean } = {},
   ): Promise<void> {
     if (!this.graph.hasNode(r.from)) {
       throw new Error(`Source node not found: ${String(r.from)}`);
@@ -922,6 +926,75 @@ export class GraphKMStore extends EventEmitter {
         `Self-referential relation refused: '${String(r.type)}' from ${String(r.from)} to itself`,
       );
     }
+    // UPSERT ON (from, to, type). The graph is a MultiDirectedGraph, so
+    // `addEdge` happily stores a second identical edge, and for a long time
+    // that is exactly what happened — while three separate call sites
+    // documented the opposite. wave-controller's relationship sweep writes
+    // every edge unconditionally on the strength of "Layer (c) — km-core's
+    // addRelation is upsert-by-(from,to,type)", and both its anchor pass and
+    // km-core-adapter fall through on a failed probe because "duplicates are
+    // tolerated by km-core's upsert semantics". None of that was true.
+    //
+    // Measured 2026-09-21, after the capturedBy anchor fix collapsed 12,456 of
+    // its own: 1,101 duplicates remained, and every one traces to a producer
+    // that believed this contract.
+    //
+    //     contains       577 surplus    wave-controller relationship sweep
+    //     mentions       439 surplus    classifier pass
+    //     parent-child    84 surplus    wave1 + legacy backfill
+    //     related_to       1 surplus
+    //
+    // The fix is here rather than a fourth probe at a fourth call site. The
+    // audit's own finding is that this system has too many places doing the
+    // same job slightly differently ("three resolvers where there should be
+    // one"); adding another probe would be that pattern again. Making the
+    // documented contract real fixes every producer at once, including ones
+    // not written yet.
+    //
+    // This UPDATES rather than throwing, unlike the self-edge guard above.
+    // A self-edge is a provable contradiction; a repeat write is a caller
+    // re-asserting something already true, which is a normal thing to do on a
+    // re-run. Throwing would turn every second UKB run into a wall of
+    // `storeRelationship failed` and, worse, would leave the sweep's
+    // `anchoredByStoredEdge` unpopulated — sending the anchor pass off to
+    // re-mint edges that already exist.
+    //
+    // Metadata merges with the NEW write winning, except `createdAt`, which
+    // keeps the ORIGINAL. That matches repair-duplicate-provenance-edges.mjs,
+    // which keeps the oldest edge per triple so first-seen provenance
+    // survives while `runId` still tracks the most recent confirmation — the
+    // same create-vs-confirm split `putEntity` makes for entities.
+    //
+    // `allowDuplicate` mirrors `allowSelfReference`: it exists to represent
+    // data that ALREADY contains duplicates (a test seeding the historical
+    // shape whose cleanup it asserts). Snapshot restore does not need it —
+    // `tolerantImport` calls `graph.import` and never reaches this method.
+    if (!opts.allowDuplicate) {
+      const existingKey = this.graph
+        .edges(r.from, r.to)
+        .find((k) => (this.graph.getEdgeAttributes(k) as Relation).type === r.type);
+      if (existingKey !== undefined) {
+        const prev = this.graph.getEdgeAttributes(existingKey) as Relation;
+        const prevMeta = (prev.metadata ?? {}) as Record<string, unknown>;
+        const nextMeta = (r.metadata ?? {}) as Record<string, unknown>;
+        const merged: Record<string, unknown> = { ...prevMeta, ...nextMeta };
+        if (prevMeta.createdAt !== undefined) {
+          merged.createdAt = prevMeta.createdAt;
+        }
+        this.graph.mergeEdgeAttributes(existingKey, {
+          ...prev,
+          metadata: merged,
+        } as Relation);
+        // Emitted even though no edge was created: before this guard a
+        // duplicate write DID emit it, and the edge is present either way.
+        // Keeping the event keeps the exporter (its only consumer) scheduling
+        // a write for the metadata that just changed.
+        this.emit('relation:added', { relation: r });
+        this.exporter.scheduleExport(this.graph.export() as SerializedGraph);
+        return;
+      }
+    }
+
     if (r.key !== undefined && r.key !== null) {
       try {
         this.graph.addDirectedEdgeWithKey(r.key, r.from, r.to, r);
