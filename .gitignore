@@ -27,3 +27,9 @@ logs/
 *.log
 .specstory/validation-report.json
 .specstory/change-log.json
+
+# fastembed ONNX weights (~88MB). Never a repo artifact — this is the
+# package-root DEFAULT cache dir, so any consumer that constructs
+# FastembedEmbeddingClient without opts.cacheDir or KM_FASTEMBED_CACHE_DIR
+# materialises the model right here.
+.fastembed-cache/
