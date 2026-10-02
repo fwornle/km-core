@@ -1,14 +1,11 @@
 // Phase 57 Plan 01 Task 1 — Project type registry unit tests.
 //
-// Locks the closed-set vocabulary (Phase 57 D-03):
-//   PROJECTS = ['coding', 'okm', 'cap'] as const
-//   type Project = typeof PROJECTS[number]
-//   isProject(x: unknown): x is Project
+// Locks the project vocabulary (Phase 57 D-03, opened for other tenants):
+//   PROJECTS = ['coding', 'okm', 'cap'] — known projects, informational
+//   isProject(x) — a well-formed tenant id, same rule as coding's lib/scope
 //
-// Source of truth for the project dimension across every km-core writer
-// (wave agents, canonical-mapper, km-core-adapter, online-mapper,
-// legacy-ingest, backfill). Adding a new project = code change here +
-// updating this test file's expectations.
+// A project need not be in PROJECTS: another team's install stamps its own
+// scope, and a closed set made every such stamp silently disappear.
 //
 // Style: mirrors tests/unit/ontology-registry.test.ts (describe/it
 // blocks, expect().toBe(true) assertions). Vitest, ES-module imports.
@@ -17,7 +14,9 @@ import { describe, it, expect } from 'vitest';
 // Task 1 imports the module directly to keep the test self-contained.
 // Task 2 wires the per-module + root barrels and appends a
 // root-barrel-reachability assertion to the bottom of this file.
-import { PROJECTS, isProject, type Project } from '../../src/types/project.js';
+import {
+  PROJECTS, isProject, PROJECT_MAX, PLACEHOLDER_PROJECT, type Project,
+} from '../../src/types/project.js';
 
 // SC#4-style surface witness — touching the named exports at runtime
 // forces the import to be retained even with strict tree-shaking and
@@ -66,6 +65,15 @@ describe('Project type registry (Phase 57 D-03)', () => {
     it('returns true for "cap"', () => {
       expect(isProject('cap')).toBe(true);
     });
+
+    it('returns true for a tenant not in PROJECTS — another team\'s scope', () => {
+      expect(isProject('acme')).toBe(true);
+      expect(isProject('team-7.kb_x')).toBe(true);
+    });
+
+    it('returns true at exactly PROJECT_MAX characters', () => {
+      expect(isProject('a'.repeat(PROJECT_MAX))).toBe(true);
+    });
   });
 
   describe('isProject typeguard — reject-list', () => {
@@ -77,8 +85,19 @@ describe('Project type registry (Phase 57 D-03)', () => {
       expect(isProject('Coding')).toBe(false);
     });
 
-    it('returns false for an unknown project name "foo"', () => {
-      expect(isProject('foo')).toBe(false);
+    it('returns false for the unconfigured placeholder "default"', () => {
+      // An install with no scope must not tag knowledge with one.
+      expect(isProject(PLACEHOLDER_PROJECT)).toBe(false);
+    });
+
+    it('returns false past PROJECT_MAX characters', () => {
+      expect(isProject('a'.repeat(PROJECT_MAX + 1))).toBe(false);
+    });
+
+    it('returns false for anything unsafe as a path segment', () => {
+      for (const bad of ['.', '..', '.hidden', '-x', 'a/b', 'a\\b', 'a b', 'ä']) {
+        expect(isProject(bad)).toBe(false);
+      }
     });
 
     it('returns false for an empty string', () => {
@@ -108,16 +127,12 @@ describe('Project type registry (Phase 57 D-03)', () => {
     });
   });
 
-  describe('compile-time Project literal type', () => {
-    it('accepts assignments from PROJECTS members (compile-time witness)', () => {
-      // If the Project literal-union type drifts away from the PROJECTS
-      // tuple, this assignment line stops compiling — caught by `tsc`.
-      const coding: Project = 'coding';
-      const okm: Project = 'okm';
-      const cap: Project = 'cap';
-      expect(coding).toBe('coding');
-      expect(okm).toBe('okm');
-      expect(cap).toBe('cap');
+  describe('isProject narrows to Project', () => {
+    it('narrows an unknown to Project', () => {
+      const raw: unknown = 'acme';
+      if (!isProject(raw)) throw new Error('expected a project');
+      const project: Project = raw;
+      expect(project).toBe('acme');
     });
   });
 });
