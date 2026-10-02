@@ -130,14 +130,32 @@ export class PersistenceManager {
     const jsonState = await this.hydrateFromJsonExports();
     const jsonNodeCount = jsonState?.nodes?.length ?? 0;
 
+    // ONE line per start, naming the source actually used and both counts, so
+    // "which copy did this process load, and was the other one behind?" is
+    // answerable from the log alone. DELTA 2: process.stderr.write, not
+    // console.info (CLAUDE.md `no-console-log`).
+    const say = (m: string) => process.stderr.write(`[km-core/persistence] hydrate: ${m}\n`);
+    const describe = (g: SerializedGraph | null) =>
+      `${g?.nodes?.length ?? 0} nodes, ${g?.edges?.length ?? 0} edges`;
+
     if (jsonNodeCount > levelDbNodeCount) {
-      process.stderr.write(
-        `[km-core/persistence] hydrate: JSON has more nodes (${jsonNodeCount}) than LevelDB (${levelDbNodeCount}); preferring JSON\n`,
+      say(
+        levelDbState === null
+          ? `from JSON export (${describe(jsonState)}): LevelDB holds no graph state`
+          : `from JSON export (${describe(jsonState)}): LevelDB is BEHIND it at ` +
+              `${levelDbNodeCount} nodes, i.e. the last clean close predates the last export`,
       );
       return jsonState;
     }
-
-    return levelDbState ?? jsonState;
+    if (levelDbState !== null) {
+      say(
+        `from LevelDB (${describe(levelDbState)}); JSON export ` +
+          (jsonState === null ? 'absent' : `has ${jsonNodeCount} nodes`),
+      );
+      return levelDbState;
+    }
+    say(jsonState === null ? 'nothing to load: no LevelDB state, no JSON export (empty graph)' : `from JSON export (${describe(jsonState)})`);
+    return jsonState;
   }
 
   /**
@@ -209,15 +227,11 @@ export class PersistenceManager {
       }
     }
 
-    if (found) {
-      // DELTA 2: replaced `console.info(...)` with `process.stderr.write(...)`
-      // to satisfy CLAUDE.md `no-console-log` constraint.
-      process.stderr.write(
-        `[km-core/persistence] LEVEL_NOT_FOUND, hydrated from JSON: ` +
-          `${merged.nodes.length} nodes, ${merged.edges.length} edges\n`,
-      );
-    }
-
+    // No log here: this only READS the export. Whether the graph is actually
+    // hydrated from it is hydrate()'s decision, and hydrate() reports it. This
+    // used to print "LEVEL_NOT_FOUND, hydrated from JSON" on every call, i.e. on
+    // every start, including the ones that then hydrated from LevelDB, so the
+    // log claimed LevelDB was missing exactly when it was working.
     return found ? merged : null;
   }
 
