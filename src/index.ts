@@ -38,8 +38,8 @@ export type { EntityId } from './ids/branded.js';
 //
 // Sub-path: `import { isProject } from '@fwornle/km-core/types';`
 // Root barrel: `import { isProject } from '@fwornle/km-core';`
-export { PROJECTS, isProject } from './types/project.js';
-export type { Project } from './types/project.js';
+export { PROJECTS, isProject, PROJECT_RE, PROJECT_MAX, PLACEHOLDER_PROJECT } from './types/project.js';
+export type { Project, KnownProject } from './types/project.js';
 
 // Phase 60 D-14 + D-23 — Hierarchy roots registry (HIERARCHY_ROOTS const
 // tuple, HierarchyRoot literal-union, HIERARCHY_ROOT_CLASS lookup map,

@@ -23,8 +23,8 @@ export type { EntityId } from '../ids/branded.js';
 // Project literal-union, isProject runtime typeguard). Single source of
 // truth for the `metadata.project` dimension stamped onto every km-core
 // entity by Phase 57 writers + readable by viewer / dashboard filters.
-export { PROJECTS, isProject } from './project.js';
-export type { Project } from './project.js';
+export { PROJECTS, isProject, PROJECT_RE, PROJECT_MAX, PLACEHOLDER_PROJECT } from './project.js';
+export type { Project, KnownProject } from './project.js';
 
 // Phase 60 D-14 + D-23 — Hierarchy roots registry (HIERARCHY_ROOTS const
 // tuple, HierarchyRoot literal-union, HIERARCHY_ROOT_CLASS lookup map,
