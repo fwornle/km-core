@@ -26,6 +26,7 @@
 
 import type { GraphKMStore } from '../store/GraphKMStore.js';
 import type { OntologyRegistry } from '../ontology/registry.js';
+import type { Entity } from '../types/entity.js';
 import { entityRoutes } from './handlers/entities.js';
 import { relationRoutes } from './handlers/relations.js';
 import { queryRoutes } from './handlers/query.js';
@@ -72,6 +73,12 @@ export interface KmCoreRouterOptions {
    *  the ontology registry's first loaded non-upper domain (when omitted).
    *  Operators with a non-default naming convention can override here. */
   displayOverlaySystem?: string;
+  /** A request-scoped entity filter for `GET /entities`, applied BEFORE the
+   *  limit (like `runId`) so a filtered page is not clipped by entities it
+   *  will not return. Receives the request's query object; returns a
+   *  predicate, or null for "no filter". km-core has no notion of who owns
+   *  an entity — the consumer does (coding maps `?teams=` to projects). */
+  entityFilter?: (query: Record<string, unknown>) => ((e: Entity) => boolean) | null;
 }
 
 /**

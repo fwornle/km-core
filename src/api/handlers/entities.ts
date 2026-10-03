@@ -85,6 +85,10 @@ export function entityRoutes(
         });
       }
 
+      // Consumer filter (opts.entityFilter), also before the limit.
+      const keep = opts.entityFilter?.((req.query ?? {}) as Record<string, unknown>) ?? null;
+      if (keep) all = all.filter(keep);
+
       // Default LIMIT (T-44-06-04): clip to 1000 if no caller limit AND large.
       let effectiveLimit = hasCallerLimit ? callerLimit : 0;
       if (!hasCallerLimit && all.length > 1000) {

@@ -163,6 +163,25 @@ describe('createKmCoreRouter — canonical /api/v1 surface', () => {
     }
   });
 
+  test('GET /api/v1/entities applies opts.entityFilter before the limit', async () => {
+    const app2 = express();
+    app2.use(express.json());
+    const r2 = Router();
+    createKmCoreRouter(store, r2, {
+      entityFilter: (q) => (q.owner ? (e) => (e.metadata as { owner?: string })?.owner === q.owner : null),
+    });
+    app2.use('/api/v1', r2);
+    for (const [name, owner] of [['A1', 'a'], ['B1', 'b'], ['A2', 'a']]) {
+      await request(app2).post('/api/v1/entities').send({
+        name, entityType: 'Component', ontologyClass: 'Component', layer: 'evidence', description: name, metadata: { owner },
+      });
+    }
+    const all = await request(app2).get('/api/v1/entities');
+    expect(all.body.data).toHaveLength(3);
+    const a = await request(app2).get('/api/v1/entities?owner=a&limit=2');
+    expect(a.body.data.map((e: { name: string }) => e.name).sort()).toEqual(['A1', 'A2']);
+  });
+
   test('GET /api/v1/stats returns 200 + envelope with OKM wire shape (nodes/edges + 10-field StatsWire)', async () => {
     // 44-CONTEXT-amendment.md: /stats emits the OKM StatsWire shape
     // (nodes/edges, NOT entityCount/relationCount), with full 10-field
