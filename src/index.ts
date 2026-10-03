@@ -9,7 +9,11 @@ export const KM_CORE_VERSION = '0.1.0';
 // CORE-02: GraphKMStore composition class — repository API + UUIDv7 stamping
 // + events + atomic per-domain JSON export.
 export { GraphKMStore } from './store/GraphKMStore.js';
-export type { GraphKMStoreOptions } from './store/GraphKMStore.js';
+export type { GraphKMStoreOptions, ReloadStats } from './store/GraphKMStore.js';
+export { domainLayout } from './store/layout.js';
+export type { ExportLayout } from './store/layout.js';
+export { mergeGraphs, relationKey, tombstonesOf } from './store/merge.js';
+export type { Tombstone, Tombstones, MergeStats } from './store/merge.js';
 
 // CORE-03: UUIDv7 stamping + caller-supplied-id validation.
 export { mintEntityId } from './ids/mint.js';
