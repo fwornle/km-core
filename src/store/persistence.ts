@@ -47,19 +47,37 @@ import { ClassicLevel } from 'classic-level';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { SerializedGraph } from '../types/entity.js';
+import { type ExportLayout, domainLayout } from './layout.js';
+import { mergeGraphs, type MergeStats } from './merge.js';
+
+type Edge = SerializedGraph['edges'][number];
 
 export interface PersistenceManagerOptions {
   /** List of known domain names. Nodes whose `metadata.domain` matches a
    *  member of this list go to `${domain}.json`; everything else falls
    *  through to `general.json`. Defaults to `['general']`. */
   domains?: readonly string[];
+  /** Which JSON files hydrate reads. Default: `domainLayout(exportDir, domains)`. */
+  layout?: ExportLayout;
+}
+
+/** What the last `hydrate()` / `readMerged()` found. */
+export interface HydrateReport {
+  stats: MergeStats;
+  /** Files that existed and were merged, in merge order (LevelDB first). */
+  files: string[];
+  /** Relations kept aside per file they came from (see merge.ts). */
+  dangling: Map<string, Edge[]>;
 }
 
 export class PersistenceManager {
   private db: ClassicLevel<string, string>;
   private exportDir: string;
   private domains: readonly string[];
+  private layout: ExportLayout;
   private writing = false;
+  /** Set by every `hydrate()` / `readMerged()`. */
+  lastReport: HydrateReport | null = null;
 
   constructor(
     dbPath: string,
@@ -73,6 +91,7 @@ export class PersistenceManager {
     this.db = new ClassicLevel(dbPath, { valueEncoding: 'utf8' });
     this.exportDir = exportDir;
     this.domains = opts?.domains ?? ['general'];
+    this.layout = opts?.layout ?? domainLayout(exportDir, this.domains);
   }
 
   /**
@@ -86,35 +105,26 @@ export class PersistenceManager {
   /**
    * Restore the in-memory graph from durable storage on `open()`.
    *
-   * Strategy: LevelDB FIRST (the runtime cache, hot, low-latency), then
-   * fall back to per-domain JSON exports if LevelDB has nothing
-   * (LEVEL_NOT_FOUND). The fallback covers the cold-start case of cloning
-   * the repo on a new machine where LevelDB doesn't exist yet but
-   * `.data/exports/*.json` are git-tracked.
+   * Every copy is MERGED (merge.ts): the LevelDB state, plus every JSON file
+   * the layout names (by default the per-domain exports; for a consumer that
+   * shares per repo, every repo's export, including a teammate's that
+   * arrived by `git pull`). Entities match by id and the newest `updatedAt`
+   * wins; deletions travel as tombstones.
    *
-   * @see hydrateFromJsonExports for the fallback path.
+   * This replaces "JSON wins only if it has MORE nodes than LevelDB" (Phase
+   * 57-05). That rule existed because `persistGraph()` only fires on a clean
+   * `close()`, so a crash leaves LevelDB days behind the 5s-debounced JSON
+   * export (coding regression 2026-06-15: 1270/1594 → 924/3). A merge covers
+   * that case — the newer JSON copy of each entity wins — without its flaw:
+   * picking one whole copy by size ignored every edit in the other one.
    */
   async hydrate(): Promise<SerializedGraph | null> {
-    // Phase 57-05 lesson: prefer JSON exports when they have MORE nodes than
-    // LevelDB. `persistGraph()` only fires on clean `close()`; an obs-api crash
-    // during shutdown (libc++abi mutex lock failure on SIGTERM) leaves LevelDB
-    // frozen at the prior clean state — sometimes days behind the JSON exports
-    // written by the exporter's 5s-debounced `scheduleExport`. Without this
-    // ordering, restart resurrects stale state over fresh JSON and the graph
-    // loses every adjacency written since the last clean shutdown.
-    // Coding-project regression on 2026-06-15: 1270/1594 → 924/3 after a
-    // backfill cycle that triggered obs-api respawns. Recovery required
-    // restoring the JSON snapshot AND wiping LevelDB AND re-applying this
-    // patch (Phase 57's `npm run build` had wiped the original 2026-06-11
-    // patch). Upstream fix: persistGraph should debounce-on-every-mutation.
     let levelDbState: SerializedGraph | null = null;
-    let levelDbNodeCount = 0;
     try {
       await this.db.open();
       const data = await this.db.get('graph:state');
       if (data !== undefined && data !== null) {
         levelDbState = JSON.parse(data) as SerializedGraph;
-        levelDbNodeCount = levelDbState?.nodes?.length ?? 0;
       }
     } catch (err: unknown) {
       if (
@@ -127,43 +137,26 @@ export class PersistenceManager {
       }
     }
 
-    const jsonState = await this.hydrateFromJsonExports();
-    const jsonNodeCount = jsonState?.nodes?.length ?? 0;
+    const merged = await this.readMerged(levelDbState);
 
-    // ONE line per start, naming the source actually used and both counts, so
-    // "which copy did this process load, and was the other one behind?" is
-    // answerable from the log alone. DELTA 2: process.stderr.write, not
-    // console.info (CLAUDE.md `no-console-log`).
-    const say = (m: string) => process.stderr.write(`[km-core/persistence] hydrate: ${m}\n`);
-    const describe = (g: SerializedGraph | null) =>
-      `${g?.nodes?.length ?? 0} nodes, ${g?.edges?.length ?? 0} edges`;
-
-    if (jsonNodeCount > levelDbNodeCount) {
-      say(
-        levelDbState === null
-          ? `from JSON export (${describe(jsonState)}): LevelDB holds no graph state`
-          : `from JSON export (${describe(jsonState)}): LevelDB is BEHIND it at ` +
-              `${levelDbNodeCount} nodes, i.e. the last clean close predates the last export`,
-      );
-      return jsonState;
-    }
-    if (levelDbState !== null) {
-      say(
-        `from LevelDB (${describe(levelDbState)}); JSON export ` +
-          (jsonState === null ? 'absent' : `has ${jsonNodeCount} nodes`),
-      );
-      return levelDbState;
-    }
-    say(jsonState === null ? 'nothing to load: no LevelDB state, no JSON export (empty graph)' : `from JSON export (${describe(jsonState)})`);
-    return jsonState;
+    // ONE line per start, naming what was merged, so "which copies did this
+    // process load?" is answerable from the log alone. DELTA 2:
+    // process.stderr.write, not console.info (CLAUDE.md `no-console-log`).
+    const r = this.lastReport!;
+    process.stderr.write(
+      `[km-core/persistence] hydrate: ${merged === null ? 'nothing to load (empty graph)' :
+        `${r.stats.nodes} nodes, ${r.stats.edges} edges`} — LevelDB ` +
+        `${levelDbState === null ? 'empty' : `${levelDbState.nodes?.length ?? 0} nodes`}, ` +
+        `${r.files.length} JSON file(s); ${r.stats.replaced} newer copies taken, ` +
+        `${r.stats.tombstoned} tombstoned, ${r.stats.dangling} relations to absent entities kept aside\n`,
+    );
+    return merged;
   }
 
   /**
-   * Reconstruct graph state from per-domain JSON exports.
-   *
-   * These files are git-tracked and may contain data from a colleague's
-   * run that arrived via git pull. They serve as the master when LevelDB
-   * is empty.
+   * Merge `base` (the LevelDB state, or the live graph on a reload) with
+   * every JSON file the layout names. `base` goes first, so it wins ties.
+   * Returns null when there is nothing at all.
    *
    * Threat-model note (T-37-03-01): we treat the JSON as untrusted data.
    * `JSON.parse` does not pollute prototypes for plain-object parsing on
@@ -171,68 +164,34 @@ export class PersistenceManager {
    * `Object.assign` into a prototype-shared object, no `lodash.merge`,
    * no `eval`.
    */
-  private async hydrateFromJsonExports(): Promise<SerializedGraph | null> {
-    const merged: SerializedGraph = {
-      attributes: {},
-      options: { type: 'directed', multi: true, allowSelfLoops: true },
-      nodes: [],
-      edges: [],
-    };
-
-    let found = false;
-    for (const domain of this.domains) {
-      const filePath = path.join(this.exportDir, `${domain}.json`);
+  async readMerged(base: SerializedGraph | null): Promise<SerializedGraph | null> {
+    const files: string[] = [];
+    const graphs: Array<SerializedGraph | null> = [base];
+    const seen = new Set<string>();
+    for (const f of this.layout.sources()) {
+      const file = path.resolve(f);
+      if (seen.has(file)) continue;
+      seen.add(file);
       try {
-        const raw = await fs.promises.readFile(filePath, 'utf-8');
-        const domainGraph = JSON.parse(raw) as SerializedGraph;
-        if (domainGraph.nodes.length > 0 || domainGraph.edges.length > 0) {
-          found = true;
-          merged.nodes.push(...domainGraph.nodes);
-          // Deduplicate edges by key to handle cross-domain edges
-          const existingKeys = new Set(merged.edges.map((e) => e.key));
-          for (const edge of domainGraph.edges) {
-            if (!existingKeys.has(edge.key)) {
-              merged.edges.push(edge);
-              existingKeys.add(edge.key);
-            }
-          }
-        }
+        const g = JSON.parse(await fs.promises.readFile(file, 'utf-8')) as SerializedGraph;
+        if (!Array.isArray(g?.nodes)) continue;
+        if (!Array.isArray(g.edges)) g.edges = [];
+        files.push(file);
+        graphs.push(g);
       } catch {
         // File doesn't exist or is invalid — skip
       }
     }
-
-    // Always attempt the `general` fallback file too. Consumers may
-    // configure `domains: ['coding']` but a colleague's machine may have
-    // dumped unknown-domain nodes into `general.json` via Exporter's
-    // fallthrough. Read it if we haven't already.
-    if (!this.domains.includes('general')) {
-      const filePath = path.join(this.exportDir, 'general.json');
-      try {
-        const raw = await fs.promises.readFile(filePath, 'utf-8');
-        const domainGraph = JSON.parse(raw) as SerializedGraph;
-        if (domainGraph.nodes.length > 0 || domainGraph.edges.length > 0) {
-          found = true;
-          merged.nodes.push(...domainGraph.nodes);
-          const existingKeys = new Set(merged.edges.map((e) => e.key));
-          for (const edge of domainGraph.edges) {
-            if (!existingKeys.has(edge.key)) {
-              merged.edges.push(edge);
-              existingKeys.add(edge.key);
-            }
-          }
-        }
-      } catch {
-        // skip
-      }
+    const { graph, stats, dangling } = mergeGraphs(graphs);
+    const byFile = new Map<string, Edge[]>();
+    for (const d of dangling) {
+      const file = files[d.source - 1];
+      if (file === undefined) continue; // from base: LevelDB has no "file"
+      if (!byFile.has(file)) byFile.set(file, []);
+      byFile.get(file)!.push(d.edge);
     }
-
-    // No log here: this only READS the export. Whether the graph is actually
-    // hydrated from it is hydrate()'s decision, and hydrate() reports it. This
-    // used to print "LEVEL_NOT_FOUND, hydrated from JSON" on every call, i.e. on
-    // every start, including the ones that then hydrated from LevelDB, so the
-    // log claimed LevelDB was missing exactly when it was working.
-    return found ? merged : null;
+    this.lastReport = { stats, files, dangling: byFile };
+    return base === null && files.length === 0 ? null : graph;
   }
 
   /**

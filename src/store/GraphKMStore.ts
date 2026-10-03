@@ -66,6 +66,15 @@ import { mintEntityId } from '../ids/mint.js';
 import { parseEntityId } from '../ids/parse.js';
 import { PersistenceManager } from './persistence.js';
 import { Exporter } from './exporter.js';
+import { type ExportLayout, TOMBSTONE_META_KEYS } from './layout.js';
+import {
+  TOMBSTONES_ATTR,
+  pruneTombstones,
+  relationKey,
+  tombstonesOf,
+  type MergeStats,
+  type Tombstones,
+} from './merge.js';
 import {
   noopOntologyValidator,
   registryBackedValidator,
@@ -135,6 +144,19 @@ export interface GraphKMStoreOptions {
    *  kernel OOM-killed the server on every poll (175 kills). Reads must
    *  not write. */
   persistOnClose?: boolean;
+  /** Where the graph is persisted as JSON, and which files hydrate merges
+   *  (layout.ts). Default: one file per `domains` entry in `exportDir`.
+   *  `exportDir` is still created and still holds nothing else. */
+  layout?: ExportLayout;
+  /** How long a deletion is remembered (and carried in the exports) so a
+   *  copy that still has the entity cannot bring it back. Default 90 days. */
+  tombstoneTtlDays?: number;
+}
+
+/** What `reloadSources()` changed in the live graph. */
+export interface ReloadStats extends MergeStats {
+  added: number;
+  removed: number;
 }
 
 /**
@@ -157,20 +179,36 @@ export class GraphKMStore extends EventEmitter {
   private validator: OntologyValidator;
   private readonly registry: OntologyRegistry | undefined;
   private readonly persistOnClose: boolean;
+  private readonly tombstoneTtlMs: number;
   private initialized = false;
 
   constructor(opts: GraphKMStoreOptions) {
     super();
     this.persistOnClose = opts.persistOnClose ?? true;
+    this.tombstoneTtlMs = (opts.tombstoneTtlDays ?? 90) * 86_400_000;
     this.graph = new MultiDirectedGraph<Entity, Relation>();
     this.persistence = new PersistenceManager(opts.dbPath, opts.exportDir, {
       domains: opts.domains,
+      layout: opts.layout,
     });
     this.exporter = new Exporter({
       exportDir: opts.exportDir,
       domains: opts.domains,
+      layout: opts.layout,
       debounceMs: opts.debounceMs,
     });
+
+    // A learning checkout's file changed under us (git pull): merge it in
+    // before anything overwrites it. Only meaningful with a shared layout;
+    // the default domain layout's files are ours alone.
+    if (opts.layout) {
+      this.exporter.onExternalChange = (files) => {
+        process.stderr.write(`[km-core/store] ${files.length} export file(s) changed on disk; merging before the next write\n`);
+        this.reloadSources().catch((err: unknown) => {
+          process.stderr.write(`[km-core/store] reload after external change failed: ${err instanceof Error ? err.message : String(err)}\n`);
+        });
+      };
+    }
 
     // Phase 38: Ontology registry (D-28 — constructor-injected, no env pickup).
     // Build the registry FIRST so the auto-wired validator below can reference it.
@@ -225,8 +263,67 @@ export class GraphKMStore extends EventEmitter {
       // then edges with graceful skipping (matches OKM's
       // graph-store.ts:336-365 pattern).
       this.tolerantImport(hydrated);
+      this.setTombstones(pruneTombstones(tombstonesOf(hydrated), this.tombstoneTtlMs));
     }
+    this.exporter.setDangling(this.persistence.lastReport?.dangling ?? new Map());
     this.initialized = true;
+  }
+
+  /**
+   * Merge every JSON source the layout names into the LIVE graph — what a
+   * long-running owner calls after `git pull` brought in a teammate's
+   * export, instead of restarting. Same rule as `open()` (merge.ts), with
+   * the live graph first so it wins ties. Schedules an export when anything
+   * changed and emits `store:reloaded` with the stats.
+   */
+  async reloadSources(): Promise<ReloadStats> {
+    if (!this.initialized) await this.open();
+    const live = this.graph.export() as SerializedGraph;
+    const before = new Set(this.graph.nodes());
+    const merged = await this.persistence.readMerged(live);
+    const report = this.persistence.lastReport!;
+    let added = 0;
+    for (const n of merged?.nodes ?? []) if (!before.has(n.key)) added++;
+    const removed = before.size + added - (merged?.nodes.length ?? 0);
+    const stats: ReloadStats = { ...report.stats, added, removed };
+    this.exporter.setDangling(report.dangling);
+    const changed = added > 0 || removed > 0 || report.stats.replaced > 0 ||
+      (merged?.edges.length ?? 0) !== this.graph.size;
+    if (merged !== null && changed) {
+      // Synchronous from here to the end: no reader can observe the graph
+      // half-rebuilt.
+      this.graph.clear();
+      this.tolerantImport(merged);
+      this.setTombstones(pruneTombstones(tombstonesOf(merged), this.tombstoneTtlMs));
+    }
+    // Even when the graph did not change, a source file may be BEHIND it
+    // (the live copy of an entity was newer); the export brings it level.
+    // Unchanged files are not rewritten, so this is cheap.
+    if (merged !== null) this.exporter.scheduleExport(this.graph.export() as SerializedGraph);
+    this.emit('store:reloaded', stats);
+    return stats;
+  }
+
+  private tombstones(): Tombstones {
+    return tombstonesOf({ attributes: this.graph.getAttributes() } as SerializedGraph);
+  }
+
+  private setTombstones(t: Tombstones): void {
+    this.graph.setAttribute(TOMBSTONES_ATTR, t as never);
+  }
+
+  private tombstoneMeta(id: string): Record<string, unknown> {
+    const m = (this.graph.hasNode(id) ? (this.graph.getNodeAttributes(id) as Entity).metadata : undefined) ?? {};
+    const out: Record<string, unknown> = {};
+    for (const k of TOMBSTONE_META_KEYS) if (m[k] !== undefined) out[k] = m[k];
+    return out;
+  }
+
+  /** Remember a deletion so an older copy elsewhere cannot undo it. */
+  private markDeleted(kind: 'entities' | 'relations', key: string, metaOf: string): void {
+    const t = this.tombstones();
+    t[kind][key] = { at: new Date().toISOString(), meta: this.tombstoneMeta(metaOf) };
+    this.setTombstones(t);
   }
 
   /**
@@ -573,6 +670,7 @@ export class GraphKMStore extends EventEmitter {
    */
   async deleteEntity(id: EntityId): Promise<boolean> {
     if (!this.graph.hasNode(id)) return false;
+    this.markDeleted('entities', id, id);
     this.graph.dropNode(id);
     this.emit('entity:delete', { id });
     this.exporter.scheduleExport(this.graph.export() as SerializedGraph);
@@ -926,6 +1024,19 @@ export class GraphKMStore extends EventEmitter {
         `Self-referential relation refused: '${String(r.type)}' from ${String(r.from)} to itself`,
       );
     }
+    // Re-adding a relation this graph (or a teammate's copy) deleted: forget
+    // the tombstone, and stamp the relation newer than it — `createdAt` may be
+    // the caller's original, older value, which the merge would let the
+    // deletion beat on the next hydrate.
+    {
+      const t = this.tombstones();
+      const rk = relationKey(String(r.from), r.type, String(r.to));
+      if (t.relations[rk]) {
+        delete t.relations[rk];
+        this.setTombstones(t);
+        r = { ...r, metadata: { ...(r.metadata ?? {}), updatedAt: new Date().toISOString() } };
+      }
+    }
     // UPSERT ON (from, to, type). The graph is a MultiDirectedGraph, so
     // `addEdge` happily stores a second identical edge, and for a long time
     // that is exactly what happened — while three separate call sites
@@ -1030,6 +1141,7 @@ export class GraphKMStore extends EventEmitter {
   async removeRelationByKey(key: string): Promise<boolean> {
     if (!this.graph.hasEdge(key)) return false;
     const r = this.graph.getEdgeAttributes(key) as Relation;
+    this.markDeleted('relations', relationKey(this.graph.source(key), r.type, this.graph.target(key)), this.graph.source(key));
     this.graph.dropEdge(key);
     this.emit('relation:removed', { relation: r });
     this.exporter.scheduleExport(this.graph.export() as SerializedGraph);
@@ -1229,6 +1341,7 @@ export class GraphKMStore extends EventEmitter {
             r.to === op.relation.to &&
             r.type === op.relation.type
           ) {
+            this.markDeleted('relations', relationKey(String(r.from), r.type, String(r.to)), String(r.from));
             this.graph.dropEdge(edgeId);
             this.emit('relation:removed', { relation: r });
             break;
